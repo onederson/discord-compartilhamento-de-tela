@@ -77,12 +77,12 @@ const OUTPUT_LIMITS = [
 const MIN_WS_BUFFER = 128 * 1024;
 
 const even = (n) => Math.max(2, n - (n % 2));
-const screenContentHint = (fps) => (fps >= 50 ? 'motion' : 'text');
 
 const captureConstraints = (fps, maxWidth = MAX_W, maxHeight = MAX_H) => ({
   width: { ideal: maxWidth, max: maxWidth },
   height: { ideal: maxHeight, max: maxHeight },
   frameRate: { ideal: fps, max: fps },
+  resizeMode: 'crop-and-scale',
 });
 
 function fitWithin(w, h, maxWidth = MAX_W, maxHeight = MAX_H) {
@@ -262,7 +262,7 @@ export function createBroadcaster({
       if ('wakeLock' in navigator) {
         wakeLock = await navigator.wakeLock.request('screen').catch(() => null);
       }
-    } catch {}
+    } catch { /* sem wake lock a transmissão segue; só perde a trava de tela */ }
 
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -279,23 +279,23 @@ export function createBroadcaster({
           antiSleepAudioCtx.resume().catch(() => {});
         }
       }
-    } catch {}
+    } catch { /* áudio anti-suspensão é opcional */ }
   }
 
   function stopAntiSleep() {
     try {
       wakeLock?.release()?.catch?.(() => {});
       wakeLock = null;
-    } catch {}
+    } catch { /* já liberado */ }
     try {
       antiSleepAudioCtx?.close()?.catch?.(() => {});
       antiSleepAudioCtx = null;
-    } catch {}
+    } catch { /* já fechado */ }
   }
 
   function createEncoder() {
     if (encoder && encoder.state !== 'closed') {
-      try { encoder.close(); } catch {}
+      try { encoder.close(); } catch { /* o navegador pode já ter fechado */ }
     }
     encoder = new VideoEncoder({
       output: onEncoded,
@@ -763,7 +763,7 @@ export function createBroadcaster({
     let frameTimeout = null;
     const alertStuck = () => {
       if (!running) return;
-      onAviso?.('A captura parece ter travado (possível bloqueio por tela cheia exclusiva). Tente capturar a Tela Inteira ou mudar o jogo para Janela com Bordas.');
+      onAviso?.('A captura travou: o Windows parou de entregar quadros do jogo. Rode o CORRIGIR_TRANSMISSAO_JOGOS.bat como administrador, REINICIE o PC e transmita pelo navegador do TRANSMITIR_SEM_TRAVAR.bat.');
       console.error('Captura de vídeo parou de emitir quadros.');
     };
     
@@ -820,11 +820,10 @@ export function createBroadcaster({
       if (!frameClock) schedule();
     };
 
-    let lastTickAt = performance.now();
     let tickTimeout = null;
     const alertStuck = () => {
       if (!running) return;
-      onAviso?.('A captura parece ter travado (possível bloqueio por tela cheia exclusiva). Tente capturar a Tela Inteira ou mudar o jogo para Janela com Bordas.');
+      onAviso?.('A captura travou: o Windows parou de entregar quadros do jogo. Rode o CORRIGIR_TRANSMISSAO_JOGOS.bat como administrador, REINICIE o PC e transmita pelo navegador do TRANSMITIR_SEM_TRAVAR.bat.');
       console.error('Captura de vídeo parou de emitir quadros.');
     };
 
@@ -832,7 +831,6 @@ export function createBroadcaster({
       if (!running) return;
       clearTimeout(tickTimeout);
       tickTimeout = setTimeout(alertStuck, 5000);
-      lastTickAt = performance.now();
 
       if (video.paused) video.play()?.catch?.(() => { });
       if (video.readyState < 2 || !video.videoWidth) return rescheduleFallback();
@@ -1349,7 +1347,7 @@ export function createBroadcaster({
     const track = fresh.getVideoTracks()[0];
     displaySurface = track.getSettings?.().displaySurface ?? null;
     await track.applyConstraints?.(captureConstraints(fps)).catch(() => { });
-    track.contentHint = screenContentHint(fps);
+    track.contentHint = 'motion';
     track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
     // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
@@ -1411,7 +1409,7 @@ export function createBroadcaster({
 
     if (fonte === 'tela') {
       const track = stream?.getVideoTracks()[0];
-      if (track) track.contentHint = screenContentHint(fps);
+      if (track) track.contentHint = 'motion';
     }
 
     // Pedir a taxa nova à própria captura evita gastar CPU codificando quadros
