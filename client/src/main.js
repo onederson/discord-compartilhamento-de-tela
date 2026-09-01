@@ -2222,12 +2222,7 @@ function stopMyBroadcast(fonte = null) {
 
 // ---------------------------------------- Modal de Compartilhamento estilo Discord
 
-let ssSelectedSource = {
-  type: 'screen',
-  name: 'Tela 3',
-  surface: 'monitor',
-};
-let ssSelectedResolution = '1440';
+let ssSelectedResolution = '1080';
 let ssSelectedFps = 60;
 
 function abrirDiscordScreenShare() {
@@ -2251,66 +2246,18 @@ function abrirDiscordScreenShare() {
   const nomeSala = $('roomPill')?.textContent?.trim() || (inDiscord ? 'Geral' : 'Team Lemon');
   if ($('ssChannelName')) $('ssChannelName').textContent = nomeSala;
 
-  // Reset para o Passo 1
-  $('ssStepSource').hidden = false;
-  $('ssStepSettings').hidden = true;
+  if (ajustes.fps) ssSelectedFps = ajustes.fps;
+  if (ajustes.bitrate >= 8_000_000) ssSelectedResolution = '1440';
+  else if (ajustes.bitrate >= 5_000_000) ssSelectedResolution = '1080';
+  else ssSelectedResolution = '720';
 
-  ativarAbaDiscordSS('screens');
-  atualizarSelecaoFonteSS();
   aplicarPillsQualidadeSS();
-
   $('screenShareModal').hidden = false;
 }
 
 function fecharDiscordScreenShare() {
   $('screenShareModal').hidden = true;
   $('share').focus();
-}
-
-function ativarAbaDiscordSS(tabName) {
-  for (const tab of document.querySelectorAll('.discord-ss-tab')) {
-    const ativa = tab.dataset.tab === tabName;
-    tab.classList.toggle('active', ativa);
-    tab.setAttribute('aria-selected', String(ativa));
-  }
-  for (const panel of document.querySelectorAll('.discord-ss-panel')) {
-    panel.classList.toggle(
-      'active',
-      panel.id === `ssTab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`,
-    );
-  }
-}
-
-function atualizarSelecaoFonteSS() {
-  for (const item of document.querySelectorAll('.discord-ss-item')) {
-    const isSelected = item.dataset.sourceName === ssSelectedSource.name;
-    item.classList.toggle('selected', isSelected);
-  }
-  if ($('ssSelectedName')) $('ssSelectedName').textContent = ssSelectedSource.name;
-
-  if ($('ssSelectedIcon')) {
-    if (ssSelectedSource.type === 'screen') {
-      $('ssSelectedIcon').innerHTML =
-        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
-    } else if (ssSelectedSource.type === 'app') {
-      $('ssSelectedIcon').innerHTML =
-        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V7h14v12z"/></svg>';
-    } else {
-      $('ssSelectedIcon').innerHTML =
-        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0-4.2c.66 0 1.2.54 1.2 1.2s-.54 1.2-1.2 1.2-1.2-.54-1.2-1.2.54-1.2 1.2-1.2zM9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>';
-    }
-  }
-}
-
-function irParaPasso2SS() {
-  $('ssStepSource').hidden = true;
-  $('ssStepSettings').hidden = false;
-  atualizarSelecaoFonteSS();
-}
-
-function voltarParaPasso1SS() {
-  $('ssStepSettings').hidden = true;
-  $('ssStepSource').hidden = false;
 }
 
 function aplicarPillsQualidadeSS() {
@@ -2352,48 +2299,18 @@ function executarGoLiveSS() {
   ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
   myBroadcast?.setQuality(ajustes);
 
-  if (ssSelectedSource.surface === 'camera') {
-    ligarFonte('camera');
-  } else {
-    ligarFonte('tela');
-  }
+  ligarFonte('tela');
 }
 
 $('share').addEventListener('click', abrirDiscordScreenShare);
 
 $('ssClose')?.addEventListener('click', fecharDiscordScreenShare);
 $('ssCancel')?.addEventListener('click', fecharDiscordScreenShare);
-$('ssGoLiveFromStep1')?.addEventListener('click', irParaPasso2SS);
-$('ssBackToStep1')?.addEventListener('click', voltarParaPasso1SS);
-$('ssChangeSource')?.addEventListener('click', voltarParaPasso1SS);
 $('ssGoLive')?.addEventListener('click', executarGoLiveSS);
 
 $('screenShareModal')?.addEventListener('click', (e) => {
   if (e.target === $('screenShareModal')) fecharDiscordScreenShare();
 });
-
-for (const tab of document.querySelectorAll('.discord-ss-tab')) {
-  tab.addEventListener('click', () => ativarAbaDiscordSS(tab.dataset.tab));
-}
-
-for (const item of document.querySelectorAll('.discord-ss-item')) {
-  item.addEventListener('click', () => {
-    ssSelectedSource = {
-      type: item.dataset.sourceType || 'screen',
-      name: item.dataset.sourceName || 'Tela 1',
-      surface: item.dataset.surface || 'monitor',
-    };
-    atualizarSelecaoFonteSS();
-  });
-  item.addEventListener('dblclick', () => {
-    ssSelectedSource = {
-      type: item.dataset.sourceType || 'screen',
-      name: item.dataset.sourceName || 'Tela 1',
-      surface: item.dataset.surface || 'monitor',
-    };
-    irParaPasso2SS();
-  });
-}
 
 $('ssQualityPreset')?.addEventListener('change', (e) => {
   const preset = e.target.value;

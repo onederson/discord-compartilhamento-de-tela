@@ -595,67 +595,13 @@ function calcularBitrateSS(res, fps) {
   return 1_000_000;
 }
 
-let ssSelectedSource = {
-  type: 'screen',
-  name: 'Tela 3',
-  surface: 'monitor',
-};
-let ssSelectedResolution = '1440';
+let ssSelectedResolution = '1080';
 let ssSelectedFps = 60;
 
 function setupDiscordSSUI() {
   if (payload?.name && $('channelName')) {
     $('channelName').textContent = `Canal de ${payload.name}`;
   }
-
-  for (const tab of document.querySelectorAll('.discord-ss-tab')) {
-    tab.addEventListener('click', () => {
-      for (const t of document.querySelectorAll('.discord-ss-tab')) {
-        const active = t === tab;
-        t.classList.toggle('active', active);
-        t.setAttribute('aria-selected', String(active));
-      }
-      for (const panel of document.querySelectorAll('.discord-ss-panel')) {
-        panel.classList.toggle(
-          'active',
-          panel.id === `tab${tab.dataset.tab.charAt(0).toUpperCase() + tab.dataset.tab.slice(1)}`,
-        );
-      }
-    });
-  }
-
-  for (const item of document.querySelectorAll('.discord-ss-item')) {
-    item.addEventListener('click', () => {
-      for (const it of document.querySelectorAll('.discord-ss-item')) {
-        it.classList.toggle('selected', it === item);
-      }
-      ssSelectedSource = {
-        type: item.dataset.sourceType || 'screen',
-        name: item.dataset.sourceName || 'Tela 1',
-        surface: item.dataset.surface || 'monitor',
-      };
-      if ($('ssSelectedName')) $('ssSelectedName').textContent = ssSelectedSource.name;
-    });
-    item.addEventListener('dblclick', () => {
-      $('stepSource').hidden = true;
-      $('stepSettings').hidden = false;
-    });
-  }
-
-  $('btnGoLiveStep1')?.addEventListener('click', () => {
-    $('stepSource').hidden = true;
-    $('stepSettings').hidden = false;
-  });
-
-  $('btnBackToStep1')?.addEventListener('click', () => {
-    $('stepSettings').hidden = true;
-    $('stepSource').hidden = false;
-  });
-
-  $('btnChangeSource')?.addEventListener('click', () => {
-    $('stepSettings').hidden = true;
-    $('stepSource').hidden = false;
-  });
 
   for (const pill of document.querySelectorAll('#resolutionPills .discord-ss-pill')) {
     pill.addEventListener('click', () => {
@@ -699,8 +645,7 @@ function setupDiscordSSUI() {
   });
 
   $('btnGoLive')?.addEventListener('click', () => {
-    const f = ssSelectedSource.surface === 'camera' ? 'camera' : 'tela';
-    paineis[f]?.ligar();
+    paineis.tela?.ligar();
   });
 }
 
