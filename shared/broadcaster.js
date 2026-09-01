@@ -255,6 +255,44 @@ export function createBroadcaster({
   // Guarda a config e audioConfig mais recentes para reenviar após reconexão.
   let lastSentConfig = null;
   let lastSentAudioConfig = null;
+  let wakeLock = null;
+  let antiSleepAudioCtx = null;
+
+  async function startAntiSleep() {
+    try {
+      if ('wakeLock' in navigator) {
+        wakeLock = await navigator.wakeLock.request('screen').catch(() => null);
+      }
+    } catch {}
+
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        antiSleepAudioCtx = new AudioCtx();
+        const osc = antiSleepAudioCtx.createOscillator();
+        const gain = antiSleepAudioCtx.createGain();
+        osc.frequency.value = 1;
+        gain.gain.value = 0.00001;
+        osc.connect(gain);
+        gain.connect(antiSleepAudioCtx.destination);
+        osc.start();
+        if (antiSleepAudioCtx.state === 'suspended') {
+          antiSleepAudioCtx.resume().catch(() => {});
+        }
+      }
+    } catch {}
+  }
+
+  function stopAntiSleep() {
+    try {
+      wakeLock?.release()?.catch?.(() => {});
+      wakeLock = null;
+    } catch {}
+    try {
+      antiSleepAudioCtx?.close()?.catch?.(() => {});
+      antiSleepAudioCtx = null;
+    } catch {}
+  }
 
   function createEncoder() {
     if (encoder && encoder.state !== 'closed') {
@@ -349,6 +387,7 @@ export function createBroadcaster({
       networkDrops = 0;
     }, 1000);
 
+    startAntiSleep();
     pump(track);
     // Pedir áudio não garante receber: em vários sistemas a caixa "compartilhar
     // o som" fica desmarcada, e o navegador devolve a tela sem faixa de som.
@@ -1389,6 +1428,7 @@ export function createBroadcaster({
   const getSettings = () => ({ bitrate, fps });
 
   function cleanup() {
+    stopAntiSleep();
     frameClock?.postMessage({ type: 'stop' });
     frameClock?.terminate();
     frameClock = null;
