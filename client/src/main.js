@@ -2220,7 +2220,17 @@ function stopMyBroadcast(fonte = null) {
   }
 }
 
-$('share').addEventListener('click', () => {
+// ---------------------------------------- Modal de Compartilhamento estilo Discord
+
+let ssSelectedSource = {
+  type: 'screen',
+  name: 'Tela 3',
+  surface: 'monitor',
+};
+let ssSelectedResolution = '1440';
+let ssSelectedFps = 60;
+
+function abrirDiscordScreenShare() {
   if (!session) return;
 
   if (minhasFontes().has('tela') || myBroadcast) {
@@ -2237,8 +2247,181 @@ $('share').addEventListener('click', () => {
     return;
   }
 
-  ligarFonte('tela');
+  // Nome do canal ativo ou sala atual
+  const nomeSala = $('roomPill')?.textContent?.trim() || (inDiscord ? 'Geral' : 'Team Lemon');
+  if ($('ssChannelName')) $('ssChannelName').textContent = nomeSala;
+
+  // Reset para o Passo 1
+  $('ssStepSource').hidden = false;
+  $('ssStepSettings').hidden = true;
+
+  ativarAbaDiscordSS('screens');
+  atualizarSelecaoFonteSS();
+  aplicarPillsQualidadeSS();
+
+  $('screenShareModal').hidden = false;
+}
+
+function fecharDiscordScreenShare() {
+  $('screenShareModal').hidden = true;
+  $('share').focus();
+}
+
+function ativarAbaDiscordSS(tabName) {
+  for (const tab of document.querySelectorAll('.discord-ss-tab')) {
+    const ativa = tab.dataset.tab === tabName;
+    tab.classList.toggle('active', ativa);
+    tab.setAttribute('aria-selected', String(ativa));
+  }
+  for (const panel of document.querySelectorAll('.discord-ss-panel')) {
+    panel.classList.toggle(
+      'active',
+      panel.id === `ssTab${tabName.charAt(0).toUpperCase() + tabName.slice(1)}`,
+    );
+  }
+}
+
+function atualizarSelecaoFonteSS() {
+  for (const item of document.querySelectorAll('.discord-ss-item')) {
+    const isSelected = item.dataset.sourceName === ssSelectedSource.name;
+    item.classList.toggle('selected', isSelected);
+  }
+  if ($('ssSelectedName')) $('ssSelectedName').textContent = ssSelectedSource.name;
+
+  if ($('ssSelectedIcon')) {
+    if (ssSelectedSource.type === 'screen') {
+      $('ssSelectedIcon').innerHTML =
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/></svg>';
+    } else if (ssSelectedSource.type === 'app') {
+      $('ssSelectedIcon').innerHTML =
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V7h14v12z"/></svg>';
+    } else {
+      $('ssSelectedIcon').innerHTML =
+        '<svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor"><path d="M12 15c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0-4.2c.66 0 1.2.54 1.2 1.2s-.54 1.2-1.2 1.2-1.2-.54-1.2-1.2.54-1.2 1.2-1.2zM9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/></svg>';
+    }
+  }
+}
+
+function irParaPasso2SS() {
+  $('ssStepSource').hidden = true;
+  $('ssStepSettings').hidden = false;
+  atualizarSelecaoFonteSS();
+}
+
+function voltarParaPasso1SS() {
+  $('ssStepSettings').hidden = true;
+  $('ssStepSource').hidden = false;
+}
+
+function aplicarPillsQualidadeSS() {
+  for (const pill of document.querySelectorAll('#ssResolutionPills .discord-ss-pill')) {
+    const ativa = pill.dataset.res === ssSelectedResolution;
+    pill.classList.toggle('active', ativa);
+    pill.setAttribute('aria-checked', String(ativa));
+  }
+  for (const pill of document.querySelectorAll('#ssFpsPills .discord-ss-pill')) {
+    const ativa = Number(pill.dataset.fps) === ssSelectedFps;
+    pill.classList.toggle('active', ativa);
+    pill.setAttribute('aria-checked', String(ativa));
+  }
+}
+
+function calcularBitrateSS(res, fps) {
+  if (fps === 60) {
+    if (res === '1440' || res === 'source') return 8_000_000;
+    if (res === '1080') return 6_000_000;
+    return 3_000_000;
+  }
+  if (fps === 30) {
+    if (res === '1440' || res === 'source') return 5_000_000;
+    if (res === '1080') return 3_000_000;
+    return 1_800_000;
+  }
+  if (res === '1440' || res === 'source') return 3_000_000;
+  if (res === '1080') return 2_000_000;
+  return 1_000_000;
+}
+
+function executarGoLiveSS() {
+  fecharDiscordScreenShare();
+
+  const bitrate = calcularBitrateSS(ssSelectedResolution, ssSelectedFps);
+  ajustes = { bitrate, fps: ssSelectedFps };
+  store('ajustes', JSON.stringify(ajustes));
+  renderPerfis();
+  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
+  myBroadcast?.setQuality(ajustes);
+
+  if (ssSelectedSource.surface === 'camera') {
+    ligarFonte('camera');
+  } else {
+    ligarFonte('tela');
+  }
+}
+
+$('share').addEventListener('click', abrirDiscordScreenShare);
+
+$('ssClose')?.addEventListener('click', fecharDiscordScreenShare);
+$('ssCancel')?.addEventListener('click', fecharDiscordScreenShare);
+$('ssGoLiveFromStep1')?.addEventListener('click', irParaPasso2SS);
+$('ssBackToStep1')?.addEventListener('click', voltarParaPasso1SS);
+$('ssChangeSource')?.addEventListener('click', voltarParaPasso1SS);
+$('ssGoLive')?.addEventListener('click', executarGoLiveSS);
+
+$('screenShareModal')?.addEventListener('click', (e) => {
+  if (e.target === $('screenShareModal')) fecharDiscordScreenShare();
 });
+
+for (const tab of document.querySelectorAll('.discord-ss-tab')) {
+  tab.addEventListener('click', () => ativarAbaDiscordSS(tab.dataset.tab));
+}
+
+for (const item of document.querySelectorAll('.discord-ss-item')) {
+  item.addEventListener('click', () => {
+    ssSelectedSource = {
+      type: item.dataset.sourceType || 'screen',
+      name: item.dataset.sourceName || 'Tela 1',
+      surface: item.dataset.surface || 'monitor',
+    };
+    atualizarSelecaoFonteSS();
+  });
+  item.addEventListener('dblclick', () => {
+    ssSelectedSource = {
+      type: item.dataset.sourceType || 'screen',
+      name: item.dataset.sourceName || 'Tela 1',
+      surface: item.dataset.surface || 'monitor',
+    };
+    irParaPasso2SS();
+  });
+}
+
+$('ssQualityPreset')?.addEventListener('change', (e) => {
+  const preset = e.target.value;
+  if (preset === 'smoother') {
+    ssSelectedResolution = '1080';
+    ssSelectedFps = 60;
+  } else if (preset === 'better_text') {
+    ssSelectedResolution = '1440';
+    ssSelectedFps = 30;
+  }
+  aplicarPillsQualidadeSS();
+});
+
+for (const pill of document.querySelectorAll('#ssResolutionPills .discord-ss-pill')) {
+  pill.addEventListener('click', () => {
+    ssSelectedResolution = pill.dataset.res;
+    if ($('ssQualityPreset')) $('ssQualityPreset').value = 'custom';
+    aplicarPillsQualidadeSS();
+  });
+}
+
+for (const pill of document.querySelectorAll('#ssFpsPills .discord-ss-pill')) {
+  pill.addEventListener('click', () => {
+    ssSelectedFps = Number(pill.dataset.fps);
+    if ($('ssQualityPreset')) $('ssQualityPreset').value = 'custom';
+    aplicarPillsQualidadeSS();
+  });
+}
 
 $('camera').addEventListener('click', () => {
   if (!session) return;
@@ -2494,7 +2677,14 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
-  for (const id of ['qualityModal', 'profileModal', 'roomModal', 'joinModal', 'createModal']) {
+  for (const id of [
+    'screenShareModal',
+    'qualityModal',
+    'profileModal',
+    'roomModal',
+    'joinModal',
+    'createModal',
+  ]) {
     if (!$(id).hidden) {
       $(id).hidden = true;
       return;

@@ -3,127 +3,363 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Transmitir</title>
-    <!-- ?v= existe porque share.js/css têm nome fixo. Quem abriu a página antes
-         dos cabeçalhos no-store guardou a versão antiga por heurística do
-         navegador, e continuaria usando ela para sempre. Trocar a query força
-         uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=28" />
+    <title>Discord - Screen Share</title>
+    <link rel="stylesheet" href="/share.css?v=30" />
   </head>
   <body>
-    <main class="card">
-      <header>
-        <h1>Transmitir</h1>
-      </header>
+    <main class="discord-ss-modal card" id="mainModal">
+      <!-- Top Banner com Ilustração Clássica do Discord -->
+      <div class="discord-ss-banner">
+        <svg class="discord-ss-artwork" viewBox="0 0 460 110" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="bgGradShare" x1="0" y1="0" x2="0" y2="110" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#232428" stop-opacity="0.95"/>
+              <stop offset="100%" stop-color="#313338"/>
+            </linearGradient>
+            <linearGradient id="wumpusGradShare" x1="200" y1="20" x2="260" y2="90" gradientUnits="userSpaceOnUse">
+              <stop offset="0%" stop-color="#8593ff"/>
+              <stop offset="100%" stop-color="#5865f2"/>
+            </linearGradient>
+          </defs>
+          <rect width="460" height="110" fill="url(#bgGradShare)"/>
+          
+          <!-- Estrelas e faíscas de celebração -->
+          <circle cx="95" cy="28" r="2.5" fill="#faa61a" opacity="0.8"/>
+          <path d="M95 20 L96 25 L101 26 L96 27 L95 32 L94 27 L89 26 L94 25 Z" fill="#faa61a" opacity="0.9"/>
+          <circle cx="360" cy="24" r="2" fill="#fee75c" opacity="0.7"/>
+          <path d="M358 18 L359 22 L363 23 L359 24 L358 28 L357 24 L353 23 L357 22 Z" fill="#fee75c" opacity="0.9"/>
+          <circle cx="160" cy="18" r="1.5" fill="#ffffff" opacity="0.6"/>
+          <circle cx="305" cy="16" r="2" fill="#5865f2" opacity="0.8"/>
+          <circle cx="380" cy="40" r="1.5" fill="#f47b67" opacity="0.7"/>
+          <circle cx="80" cy="50" r="2" fill="#57f287" opacity="0.6"/>
 
-      <!-- Erro que impede a página inteira: token inválido, navegador sem
-           suporte. Os erros de cada fonte ficam no bloco dela. -->
-      <p id="pageStatus" class="status" role="status"></p>
+          <!-- Arco sutil atrás do sofá -->
+          <path d="M120 95 C120 40, 340 40, 340 95 Z" fill="#3b3e45" opacity="0.45"/>
 
-      <div class="fontes">
-        <section class="bloco" id="bloco-tela">
-          <h2>Tela</h2>
+          <!-- Sofá / Couch branco do Discord -->
+          <rect x="135" y="44" width="190" height="42" rx="10" fill="#e3e5e8"/>
+          <path d="M140 48 C140 45, 145 44, 155 44 L305 44 C315 44, 320 45, 320 48 L320 80 L140 80 Z" fill="#ffffff"/>
+          <line x1="195" y1="44" x2="195" y2="82" stroke="#d1d5db" stroke-width="2"/>
+          <line x1="265" y1="44" x2="265" y2="82" stroke="#d1d5db" stroke-width="2"/>
+          <rect x="125" y="52" width="22" height="34" rx="8" fill="#f2f3f5"/>
+          <rect x="313" y="52" width="22" height="34" rx="8" fill="#f2f3f5"/>
+          <rect x="130" y="74" width="200" height="18" rx="6" fill="#ebedef"/>
+          <rect x="145" y="90" width="8" height="6" rx="2" fill="#232428"/>
+          <rect x="307" y="90" width="8" height="6" rx="2" fill="#232428"/>
 
-          <div id="tela-setup">
-            <div class="sem-preview" id="tela-vazio">Sem preview</div>
-            <video id="tela-previa" muted playsinline hidden></video>
+          <!-- Personagem preto esquerdo -->
+          <circle cx="160" cy="38" r="7" fill="#18191c"/>
+          <rect x="154" y="44" width="12" height="22" rx="6" fill="#18191c"/>
+          <path d="M152 48 Q144 40 148 32" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
+          <path d="M166 48 Q174 44 172 36" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
+          <path d="M148 30 L150 24 L146 20 L143 25 Z" fill="#faa61a"/>
+          <circle cx="147" cy="23" r="2.5" fill="#fee75c"/>
 
-            <p class="note" id="tela-nota">
-              Para trocar de abas sem congelar, escolha <strong>Janela</strong> e selecione a janela
-              do Firefox. Escolha <strong>Tela inteira</strong> para transmitir o monitor. No
-              Firefox para Windows, o áudio isolado do aplicativo liga automaticamente; nos
-              outros navegadores, marque "Compartilhar o áudio" quando a opção aparecer.
-            </p>
+          <!-- Wumpus azul -->
+          <path d="M214 26 C214 16, 246 16, 246 26 C256 26, 260 38, 258 54 C256 70, 250 82, 230 82 C210 82, 204 70, 202 54 C200 38, 204 26, 214 26 Z" fill="url(#wumpusGradShare)"/>
+          <ellipse cx="214" cy="24" rx="4" ry="7" fill="#6d7bf5" transform="rotate(-20 214 24)"/>
+          <ellipse cx="246" cy="24" rx="4" ry="7" fill="#6d7bf5" transform="rotate(20 246 24)"/>
+          <ellipse cx="222" cy="42" rx="3" ry="4.5" fill="#18191c"/>
+          <ellipse cx="238" cy="42" rx="3" ry="4.5" fill="#18191c"/>
+          <circle cx="223" cy="40.5" r="1.2" fill="#ffffff"/>
+          <circle cx="239" cy="40.5" r="1.2" fill="#ffffff"/>
+          <ellipse cx="230" cy="50" rx="7" ry="5" fill="#b0b8ff"/>
+          <ellipse cx="227.5" cy="49" rx="1.2" ry="1.8" fill="#5865f2"/>
+          <ellipse cx="232.5" cy="49" rx="1.2" ry="1.8" fill="#5865f2"/>
+          <path d="M228 52 Q230 54 232 52" stroke="#5865f2" stroke-width="1.2" stroke-linecap="round" fill="none"/>
+          <ellipse cx="218" cy="62" rx="4" ry="3" fill="#8593ff"/>
+          <ellipse cx="242" cy="62" rx="4" ry="3" fill="#8593ff"/>
 
-            <!-- A seta escolhe sem transmitir; o botão transmite o que estiver
-                 escolhido. Separados porque conferir o enquadramento e ir ao
-                 ar são decisões diferentes, e juntas não dá para voltar atrás
-                 diante de quem já está assistindo. -->
-            <div class="acao">
-              <button id="tela-start" class="primary">Escolher janela ou tela</button>
-              <button
-                id="tela-escolher"
-                class="primary seta"
-                title="Ver outra tela antes de transmitir"
-                aria-label="Ver outra tela antes de transmitir"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
-              </button>
-            </div>
-          </div>
+          <!-- Pipoca -->
+          <path d="M260 62 C260 62, 263 76, 280 76 C297 76, 300 62, 300 62 Z" fill="#57f287"/>
+          <ellipse cx="280" cy="62" rx="20" ry="4" fill="#3ba55d"/>
+          <circle cx="270" cy="57" r="4.5" fill="#fee75c"/>
+          <circle cx="277" cy="55" r="5" fill="#ffffff"/>
+          <circle cx="285" cy="56" r="4.5" fill="#fee75c"/>
+          <circle cx="291" cy="59" r="3.5" fill="#ffffff"/>
+          <circle cx="273" cy="52" r="3.5" fill="#fee75c"/>
+          <circle cx="281" cy="51" r="4" fill="#fee75c"/>
+          <circle cx="266" cy="46" r="2.5" fill="#fee75c"/>
 
-          <div id="tela-live" hidden>
-            <div class="live-badge"><span class="dot"></span> No ar</div>
-            <video id="tela-preview" muted playsinline></video>
-            <div class="stats">
-              <div><strong id="tela-viewers">0</strong><span>assistindo</span></div>
-              <div><strong id="tela-fps">—</strong><span>quadros</span></div>
-              <div><strong id="tela-bitrate">—</strong><span>enviando</span></div>
-              <div><strong id="tela-elapsed">00:00</strong><span>no ar</span></div>
-            </div>
-            <button id="somAba" class="secondary" hidden>Escolher áudio separado</button>
-            <button id="tela-stop" class="danger">Parar de transmitir a tela</button>
-          </div>
-
-          <div id="tela-recovery" hidden style="margin-top: 10px;">
-            <p class="status error" style="margin-bottom: 10px;">O vídeo parou (o jogo pode ter minimizado ou mudado de resolução).</p>
-            <button id="tela-recover-btn" class="primary">Selecionar tela novamente</button>
-          </div>
-
-          <p id="tela-status" class="status" role="status"></p>
-        </section>
-
-        <section class="bloco" id="bloco-camera">
-          <h2>Câmera</h2>
-
-          <div id="camera-setup">
-            <div class="sem-preview" id="camera-vazio">Sem preview</div>
-            <video id="camera-previa" muted playsinline hidden></video>
-
-            <div class="acao">
-              <button id="camera-start" class="primary">Ligar a câmera</button>
-              <button
-                id="camera-escolher"
-                class="primary seta"
-                title="Escolher a câmera"
-                aria-label="Escolher a câmera"
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
-              </button>
-
-              <!-- Preenchido depois da permissão: antes dela o navegador entrega
-                   os dispositivos sem nome, e uma lista de itens em branco não
-                   ajuda ninguém a escolher. -->
-              <ul id="camera-menu" class="menu" role="menu" hidden></ul>
-            </div>
-          </div>
-
-          <div id="camera-live" hidden>
-            <div class="live-badge"><span class="dot"></span> No ar</div>
-            <video id="camera-preview" muted playsinline></video>
-            <div class="stats">
-              <div><strong id="camera-viewers">0</strong><span>assistindo</span></div>
-              <div><strong id="camera-fps">—</strong><span>quadros</span></div>
-              <div><strong id="camera-bitrate">—</strong><span>enviando</span></div>
-              <div><strong id="camera-elapsed">00:00</strong><span>no ar</span></div>
-            </div>
-            <button id="camera-stop" class="danger">Desligar a câmera</button>
-          </div>
-
-          <p id="camera-status" class="status" role="status"></p>
-        </section>
+          <!-- Personagem preto direito -->
+          <circle cx="304" cy="42" r="6.5" fill="#18191c"/>
+          <rect x="298" y="48" width="12" height="20" rx="5" fill="#18191c"/>
+          <path d="M298 52 Q288 50 284 54" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
+          <circle cx="283" cy="53" r="2" fill="#fee75c"/>
+          <path d="M310 52 Q318 46 316 40" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
+          <circle cx="316" cy="38" r="3" fill="#fee75c"/>
+        </svg>
       </div>
 
-      <footer>
-        <p>
-          Mantenha esta aba aberta enquanto transmite. Você pode voltar para o Discord — a
-          transmissão continua.
-        </p>
+      <!-- Cabeçalho -->
+      <div class="discord-ss-header">
+        <h2 id="ssTitle" class="discord-ss-title">Compartilhar tela</h2>
+        <p id="ssSubtitle" class="discord-ss-subtitle">Selecione o que deseja transmitir e chame seus amigos para assistir!</p>
+      </div>
+
+      <p id="pageStatus" class="status" role="status"></p>
+
+      <!-- PASSO 1: Seleção de Fonte -->
+      <div id="stepSource" class="discord-ss-step">
+        <div class="discord-ss-tabs" role="tablist">
+          <button type="button" class="discord-ss-tab" data-tab="applications" role="tab" aria-selected="false">Aplicativos</button>
+          <button type="button" class="discord-ss-tab active" data-tab="screens" role="tab" aria-selected="true">Telas</button>
+          <button type="button" class="discord-ss-tab" data-tab="devices" role="tab" aria-selected="false">Dispositivos de captura</button>
+        </div>
+
+        <div class="discord-ss-body">
+          <!-- Applications Tab -->
+          <div id="tabApplications" class="discord-ss-panel" role="tabpanel">
+            <div class="discord-ss-grid">
+              <div class="discord-ss-item" data-source-type="app" data-source-name="Janela do Navegador" data-surface="window">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-window-mockup">
+                    <div class="discord-ss-win-bar">
+                      <span class="discord-ss-dot red"></span>
+                      <span class="discord-ss-dot yellow"></span>
+                      <span class="discord-ss-dot green"></span>
+                      <span class="discord-ss-win-tab">Discord Web</span>
+                    </div>
+                    <div class="discord-ss-win-content discord-ss-content-browser">
+                      <svg viewBox="0 0 24 24" width="28" height="28" fill="#5865f2">
+                        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Janela do Navegador</span>
+              </div>
+
+              <div class="discord-ss-item" data-source-type="app" data-source-name="Jogo / Aplicativo" data-surface="window">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-window-mockup">
+                    <div class="discord-ss-win-bar">
+                      <span class="discord-ss-dot"></span>
+                      <span class="discord-ss-dot"></span>
+                      <span class="discord-ss-dot"></span>
+                      <span class="discord-ss-win-tab">Jogo</span>
+                    </div>
+                    <div class="discord-ss-win-content discord-ss-content-game">
+                      <svg viewBox="0 0 24 24" width="28" height="28" fill="#57f287">
+                        <path d="M21 6H3c-1.1 0-2 .9-2 2v8c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm-10 7H8v3H6v-3H3v-2h3V8h2v3h3v2zm4.5 2c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm4-3c-.83 0-1.5-.67-1.5-1.5S18.67 9 19.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Jogo / Aplicativo</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Screens Tab (com Tela 1, Tela 2, Tela 3) -->
+          <div id="tabScreens" class="discord-ss-panel active" role="tabpanel">
+            <div class="discord-ss-grid">
+              <div class="discord-ss-item" data-source-type="screen" data-source-name="Tela 1" data-surface="monitor">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-screen-mockup">
+                    <div class="discord-ss-screen-display">
+                      <div class="discord-ss-screen-wallpaper wallpaper-dark1"></div>
+                      <div class="discord-ss-screen-taskbar"></div>
+                    </div>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Tela 1</span>
+              </div>
+
+              <div class="discord-ss-item" data-source-type="screen" data-source-name="Tela 2" data-surface="monitor">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-screen-mockup">
+                    <div class="discord-ss-screen-display">
+                      <div class="discord-ss-screen-wallpaper wallpaper-dark2"></div>
+                      <div class="discord-ss-screen-taskbar"></div>
+                    </div>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Tela 2</span>
+              </div>
+
+              <div class="discord-ss-item selected" data-source-type="screen" data-source-name="Tela 3" data-surface="monitor">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-screen-mockup screen-wumpus-bg">
+                    <div class="discord-ss-wumpus-face">
+                      <div class="discord-ss-face-arch"></div>
+                      <div class="discord-ss-face-eye left"></div>
+                      <div class="discord-ss-face-eye right"></div>
+                      <div class="discord-ss-face-snout">
+                        <span class="discord-ss-nostril"></span>
+                        <span class="discord-ss-nostril"></span>
+                      </div>
+                    </div>
+                    <div class="discord-ss-cursor-pointer">
+                      <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
+                        <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87c.45 0 .67-.54.35-.85L5.85 2.86a.5.5 0 0 0-.35.35z" fill="#ffffff" stroke="#000000" stroke-width="1.5"/>
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Tela 3</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Capture Devices Tab -->
+          <div id="tabDevices" class="discord-ss-panel" role="tabpanel">
+            <div class="discord-ss-grid">
+              <div class="discord-ss-item" data-source-type="device" data-source-name="Câmera Integrada" data-surface="camera">
+                <div class="discord-ss-thumb">
+                  <div class="discord-ss-camera-mockup">
+                    <svg viewBox="0 0 24 24" width="36" height="36" fill="#949ba4">
+                      <path d="M12 15c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0-4.2c.66 0 1.2.54 1.2 1.2s-.54 1.2-1.2 1.2-1.2-.54-1.2-1.2.54-1.2 1.2-1.2zM9 2L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2h-3.17L15 2H9zm3 15c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5z"/>
+                    </svg>
+                  </div>
+                </div>
+                <span class="discord-ss-item-name">Câmera Integrada</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="discord-ss-footer">
+          <button type="button" id="btnGoLiveStep1" class="discord-ss-btn-golive">Avançar</button>
+        </div>
+      </div>
+
+      <!-- PASSO 2: Configurações de Transmissão -->
+      <div id="stepSettings" class="discord-ss-step" hidden>
+        <div class="discord-ss-settings-body">
+          <div class="discord-ss-section">
+            <div class="discord-ss-section-title">O QUE VOCÊ ESTÁ TRANSMITINDO</div>
+            <div class="discord-ss-card-row">
+              <div class="discord-ss-source-info">
+                <span class="discord-ss-source-icon" id="ssSelectedIcon">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="currentColor">
+                    <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+                  </svg>
+                </span>
+                <span class="discord-ss-source-name" id="ssSelectedName">Tela 3</span>
+              </div>
+              <button type="button" id="btnChangeSource" class="discord-ss-btn-change">Alterar</button>
+            </div>
+            <div class="discord-ss-note-warning">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="#949ba4">
+                <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
+              </svg>
+              <span>O som pode não estar disponível ao compartilhar uma tela no seu dispositivo.</span>
+            </div>
+          </div>
+
+          <div class="discord-ss-section">
+            <div class="discord-ss-section-title">CANAL DE TRANSMISSÃO</div>
+            <div class="discord-ss-card-row">
+              <div class="discord-ss-channel-info">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="#949ba4">
+                  <path d="M11 5L6 9H2v6h4l5 4V5zm4.5 7c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM13 4.45v2.06c2.89.86 5 3.54 5 6.49s-2.11 5.63-5 6.49v2.06c4.01-.91 7-4.49 7-8.55s-2.99-7.64-7-8.55z"/>
+                </svg>
+                <span class="discord-ss-channel-emoji" id="channelEmoji">🍋</span>
+                <span class="discord-ss-channel-name" id="channelName">Team Lemon</span>
+              </div>
+            </div>
+            <label class="discord-ss-checkbox-row">
+              <input type="checkbox" id="notifyFriends" checked />
+              <span class="discord-ss-checkbox-custom">
+                <svg viewBox="0 0 18 18" width="12" height="12" fill="none">
+                  <polyline points="3.5 9.5 7 13 14.5 5.5" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </span>
+              <span class="discord-ss-checkbox-label">Notificar meus amigos neste servidor de que estou transmitindo.</span>
+            </label>
+          </div>
+
+          <div class="discord-ss-section">
+            <div class="discord-ss-section-title">QUALIDADE DA TRANSMISSÃO</div>
+            <div class="discord-ss-select-wrap">
+              <select id="qualityPreset" class="discord-ss-select">
+                <option value="smoother" selected>Vídeo mais fluido</option>
+                <option value="better_text">Texto mais nítido</option>
+                <option value="custom">Personalizado</option>
+              </select>
+              <svg class="discord-ss-select-arrow" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                <path d="M7 10l5 5 5-5z"/>
+              </svg>
+            </div>
+
+            <div class="discord-ss-control-group">
+              <div class="discord-ss-control-label">RESOLUÇÃO</div>
+              <div class="discord-ss-pills" id="resolutionPills" role="radiogroup">
+                <button type="button" class="discord-ss-pill" data-res="720">720</button>
+                <button type="button" class="discord-ss-pill" data-res="1080">1080</button>
+                <button type="button" class="discord-ss-pill active" data-res="1440">1440</button>
+                <button type="button" class="discord-ss-pill" data-res="source">ORIGINAL</button>
+              </div>
+            </div>
+
+            <div class="discord-ss-control-group">
+              <div class="discord-ss-control-label">TAXA DE QUADROS</div>
+              <div class="discord-ss-pills" id="fpsPills" role="radiogroup">
+                <button type="button" class="discord-ss-pill" data-fps="15">15</button>
+                <button type="button" class="discord-ss-pill" data-fps="30">30</button>
+                <button type="button" class="discord-ss-pill active" data-fps="60">60</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="discord-ss-section">
+            <div class="discord-ss-section-title">CONFIGURAÇÕES DE CLIPS</div>
+            <div class="discord-ss-card-row discord-ss-clips-card">
+              <div class="discord-ss-clips-info">
+                <div class="discord-ss-clips-title">Ativar gravação de clips</div>
+                <div class="discord-ss-clips-sub">
+                  Capture clips durante sua transmissão com <kbd class="discord-ss-kbd">ALT</kbd> <kbd class="discord-ss-kbd">C</kbd> .
+                </div>
+              </div>
+              <label class="discord-ss-toggle-switch">
+                <input type="checkbox" checked />
+                <span class="discord-ss-slider">
+                  <svg class="discord-ss-toggle-check" viewBox="0 0 16 16" width="10" height="10" fill="none">
+                    <path d="M3.5 8.5L6.5 11.5L12.5 4.5" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                </span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div class="discord-ss-footer">
+          <button type="button" id="btnBackToStep1" class="discord-ss-btn-back">Voltar</button>
+          <button type="button" id="btnGoLive" class="discord-ss-btn-golive">Entrar ao vivo</button>
+        </div>
+      </div>
+
+      <!-- ESTADO AO VIVO (Transmitindo) -->
+      <div id="liveView" class="live-container" hidden>
+        <div class="live-badge"><span class="dot"></span> No ar</div>
+        <video id="livePreview" muted playsinline></video>
+        <div class="stats">
+          <div><strong id="liveViewers">0</strong><span>assistindo</span></div>
+          <div><strong id="liveFps">—</strong><span>quadros</span></div>
+          <div><strong id="liveBitrate">—</strong><span>enviando</span></div>
+          <div><strong id="liveElapsed">00:00</strong><span>no ar</span></div>
+        </div>
+
+        <div id="recoveryView" hidden style="margin: 12px 0;">
+          <p class="status error" style="margin-bottom: 8px;">O vídeo parou (o jogo pode ter minimizado ou mudado de resolução).</p>
+          <button id="btnRecover" class="primary">Selecionar tela novamente</button>
+        </div>
+
+        <button id="btnStopLive" class="danger">Parar de transmitir</button>
+      </div>
+
+      <!-- Elementos ocultos para compatibilidade com o backend/broadcaster -->
+      <div hidden>
+        <section id="bloco-tela"><div id="tela-setup"><button id="tela-start"></button><button id="tela-escolher"></button><video id="tela-previa"></video><div id="tela-vazio"></div></div><div id="tela-live"><video id="tela-preview"></video><strong id="tela-viewers"></strong><strong id="tela-fps"></strong><strong id="tela-bitrate"></strong><strong id="tela-elapsed"></strong><button id="tela-stop"></button><button id="somAba"></button></div><div id="tela-recovery"><button id="tela-recover-btn"></button></div><p id="tela-status"></p></section>
+        <section id="bloco-camera"><div id="camera-setup"><button id="camera-start"></button><button id="camera-escolher"></button><ul id="camera-menu"></ul><video id="camera-previa"></video><div id="camera-vazio"></div></div><div id="camera-live"><video id="camera-preview"></video><strong id="camera-viewers"></strong><strong id="camera-fps"></strong><strong id="camera-bitrate"></strong><strong id="camera-elapsed"></strong><button id="camera-stop"></button></div><p id="camera-status"></p></section>
+      </div>
+
+      <footer class="discord-ss-page-footer">
+        <p>Mantenha esta aba aberta enquanto transmite. Você pode voltar para o Discord — a transmissão continua.</p>
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=29"></script>
+    <script type="module" src="/share.js?v=30"></script>
   </body>
 </html>
