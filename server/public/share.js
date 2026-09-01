@@ -428,6 +428,42 @@ function criarPainel(fonte) {
         el('bitrate').textContent = `${s.mbps.toFixed(1)} Mb/s`;
         el('elapsed').textContent =
           `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
+
+        const box = $(`${fonte}-watchers-box`);
+        const list = $(`${fonte}-watchers-list`);
+        if (box && list) {
+          if (Array.isArray(s.watchers) && s.watchers.length > 0) {
+            box.hidden = false;
+            list.replaceChildren(
+              ...s.watchers.map((w) => {
+                const chip = document.createElement('div');
+                chip.className = 'watcher-chip';
+
+                if (w.avatar) {
+                  const img = document.createElement('img');
+                  img.className = 'watcher-avatar';
+                  img.src = `/api/avatar/${w.id}/${w.avatar}`;
+                  img.alt = w.name || '';
+                  chip.appendChild(img);
+                } else {
+                  const initial = document.createElement('div');
+                  initial.className = 'watcher-avatar';
+                  initial.textContent = (w.name || '?').charAt(0).toUpperCase();
+                  chip.appendChild(initial);
+                }
+
+                const name = document.createElement('span');
+                name.textContent = w.name || 'Espectador';
+                chip.appendChild(name);
+
+                return chip;
+              }),
+            );
+          } else {
+            box.hidden = true;
+            list.replaceChildren();
+          }
+        }
       },
       onAviso: (msg) => {
         if (msg === 'Áudio isolado do Firefox ligado.') {

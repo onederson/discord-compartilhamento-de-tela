@@ -35,7 +35,7 @@ echo.
 echo  Modo selecionado: 2 - Classico DXGI/GDI
 
 :perguntar_link
-set "FLAGS=%FLAGS% --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required"
+set "FLAGS=%FLAGS% --no-first-run --no-default-browser-check --disable-backgrounding-occluded-windows --disable-background-timer-throttling --disable-renderer-backgrounding --autoplay-policy=no-user-gesture-required --disable-infobars"
 set "PERFIL=%LocalAppData%\SalaDeTela\NavegadorJogos"
 echo.
 echo  Cole o link de transmissao - o que termina em /share.html?t=...

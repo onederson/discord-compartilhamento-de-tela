@@ -8,7 +8,7 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=35" />
+    <link rel="stylesheet" href="/share.css?v=40" />
   </head>
   <body>
     <main class="card">
@@ -61,6 +61,12 @@
               <div><strong id="tela-bitrate">—</strong><span>enviando</span></div>
               <div><strong id="tela-elapsed">00:00</strong><span>no ar</span></div>
             </div>
+
+            <div id="tela-watchers-box" class="watchers-box" hidden>
+              <div class="watchers-title">Assistindo agora</div>
+              <div id="tela-watchers-list" class="watchers-list"></div>
+            </div>
+
             <button id="tela-change" class="secondary">Trocar de tela ou janela</button>
             <button id="somAba" class="secondary" hidden>Escolher áudio separado</button>
             <button id="tela-stop" class="danger">Parar de transmitir a tela</button>
@@ -110,6 +116,12 @@
               <div><strong id="camera-bitrate">—</strong><span>enviando</span></div>
               <div><strong id="camera-elapsed">00:00</strong><span>no ar</span></div>
             </div>
+
+            <div id="camera-watchers-box" class="watchers-box" hidden>
+              <div class="watchers-title">Assistindo agora</div>
+              <div id="camera-watchers-list" class="watchers-list"></div>
+            </div>
+
             <button id="camera-stop" class="danger">Desligar a câmera</button>
           </div>
 
@@ -125,6 +137,6 @@
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=35"></script>
+    <script type="module" src="/share.js?v=40"></script>
   </body>
 </html>

@@ -2155,10 +2155,7 @@ function trazerAba(fonte) {
 async function abrirCaptura(fonte) {
   if (!roomTokens) return;
 
-  // Só a tela tem chance de nascer aqui dentro; o Discord anula o getUserMedia
-  // no iframe, então a câmera vai direto para a aba.
-  if (fonte === 'tela' && (await broadcastFromHere())) return;
-
+  // Opção 1: Abre sempre a aba externa de captura no navegador
   abrirLink(fonte);
 }
 

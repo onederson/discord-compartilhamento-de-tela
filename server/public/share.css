@@ -126,6 +126,56 @@ button:disabled {
   background: var(--danger);
 }
 
+.watchers-box {
+  margin: 12px 0 16px;
+  padding: 10px 12px;
+  background: #1e1f22;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.watchers-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 8px;
+}
+
+.watchers-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.watcher-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: #2b2d31;
+  padding: 4px 10px 4px 4px;
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.watcher-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
 .live-badge {
   display: inline-flex;
   align-items: center;
@@ -220,7 +270,7 @@ video {
     flex-direction: column;
   }
 
-  .bloco > div {
+  .bloco>div {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -234,11 +284,11 @@ video {
      nada encostaria em lugar nenhum. Por isso o botão azul cobre o bloco parado
      e o vermelho cobre o bloco no ar — cada um existe só no seu, então nunca
      aparecem os dois juntos. */
-  .bloco > div > .acao {
+  .bloco>div>.acao {
     margin-top: auto;
   }
 
-  .bloco > div > button.danger {
+  .bloco>div>button.danger {
     margin-top: auto;
   }
 }
@@ -289,12 +339,12 @@ video {
   gap: 8px;
 }
 
-.acao > .primary {
+.acao>.primary {
   flex: 1;
   margin: 0;
 }
 
-.acao > .seta {
+.acao>.seta {
   flex: 0 0 46px;
   display: flex;
   align-items: center;

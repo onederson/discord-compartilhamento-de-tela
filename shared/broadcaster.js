@@ -240,6 +240,7 @@ export function createBroadcaster({
   let bytes = 0;
   let frames = 0;
   let viewers = 0;
+  let watchers = [];
   let statsTimer = null;
   let capturedFrames = 0;
   let encoderDrops = 0;
@@ -367,6 +368,7 @@ export function createBroadcaster({
       adaptNetworkQuality();
       onStats?.({
         viewers,
+        watchers,
         fps: frames,
         captureFps: capturedFrames,
         droppedFrames: encoderDrops + networkDrops,
@@ -1180,7 +1182,15 @@ export function createBroadcaster({
         if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
           mySlot = msg.slot;
           pronto();
-        } else if (msg.type === 'state') viewers = msg.viewers;
+        } else if (msg.type === 'state') {
+          const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
+          if (myStream?.watchers) {
+            watchers = myStream.watchers;
+            viewers = watchers.length;
+          } else {
+            viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
+          }
+        }
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
         else if (msg.type === 'relay-congestion') relayCongestion = true;
@@ -1255,7 +1265,15 @@ export function createBroadcaster({
               mySlot = msg.slot;
               clearTimeout(timeout);
               resolve();
-            } else if (msg.type === 'state') viewers = msg.viewers;
+            } else if (msg.type === 'state') {
+              const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
+              if (myStream?.watchers) {
+                watchers = myStream.watchers;
+                viewers = watchers.length;
+              } else {
+                viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
+              }
+            }
             else if (msg.type === 'need-keyframe') wantKeyframe = true;
             else if (msg.type === 'relay-congestion') relayCongestion = true;
             else if (msg.type === 'native-audio-ready') {
