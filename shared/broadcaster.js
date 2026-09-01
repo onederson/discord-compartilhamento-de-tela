@@ -83,7 +83,6 @@ const captureConstraints = (fps, maxWidth = MAX_W, maxHeight = MAX_H) => ({
   width: { ideal: maxWidth, max: maxWidth },
   height: { ideal: maxHeight, max: maxHeight },
   frameRate: { ideal: fps, max: fps },
-  resizeMode: 'crop-and-scale',
 });
 
 function fitWithin(w, h, maxWidth = MAX_W, maxHeight = MAX_H) {
@@ -315,9 +314,7 @@ export function createBroadcaster({
 
     const track = stream.getVideoTracks()[0];
     displaySurface = track.getSettings?.().displaySurface ?? null;
-    // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
-    // vídeo natural, e aí suavizar é justamente o certo.
-    track.contentHint = fonte === 'camera' ? 'motion' : screenContentHint(fps);
+    track.contentHint = 'motion';
     track.addEventListener('ended', () => {
       if (onTrackEnded) {
         onTrackEnded();
