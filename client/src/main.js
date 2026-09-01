@@ -980,6 +980,11 @@ function renderBar() {
   btn.classList.toggle('live', telaNoAr);
   btn.disabled = false;
 
+  const changeBtn = $('changeScreen');
+  if (changeBtn) {
+    changeBtn.hidden = !telaNoAr;
+  }
+
   const telaLimitadaNoMovel = clienteMovel && !capturaTelaDisponivel() && !telaNoAr;
   btn.classList.toggle('unavailable', telaLimitadaNoMovel);
   $('mobileCaptureNote').hidden = !telaLimitadaNoMovel;
@@ -2003,17 +2008,63 @@ function renderPerfis() {
   $('quality').classList.toggle('on', atual !== 'equilibrado');
 }
 
+let fluxoPrimeiraTransmissao = false;
+
+function abrirQualidade({ primeiraVez = false } = {}) {
+  fluxoPrimeiraTransmissao = primeiraVez;
+  renderPerfis();
+
+  const title = $('qualityTitle');
+  const cancelBtn = $('qualityCancel');
+  const closeBtn = $('qualityClose');
+  const hint = $('qualityHint');
+
+  if (primeiraVez) {
+    if (title) title.textContent = 'Escolha a qualidade da transmissão';
+    if (cancelBtn) cancelBtn.hidden = false;
+    if (closeBtn) closeBtn.textContent = 'Começar a transmitir';
+    if (hint) {
+      hint.textContent =
+        'Esta escolha será lembrada nas próximas transmissões. Você poderá alterá-la quando quiser pelo ícone de engrenagem.';
+    }
+  } else {
+    if (title) title.textContent = 'Qualidade da transmissão';
+    if (cancelBtn) cancelBtn.hidden = true;
+    if (closeBtn) closeBtn.textContent = 'Concluir';
+    if (hint) {
+      hint.textContent =
+        'A resolução é limitada a 1080p. O navegador reduz quadros automaticamente se o computador não acompanhar.';
+    }
+  }
+
+  $('qualityModal').hidden = false;
+  document.querySelector(`[data-quality="${perfilAtual()}"]`)?.focus();
+}
+
 function fecharQualidade() {
   $('qualityModal').hidden = true;
+  fluxoPrimeiraTransmissao = false;
   $('quality').focus();
 }
 
+function confirmarQualidade() {
+  store('qualidade_configurada', '1');
+  store('ajustes', JSON.stringify(ajustes));
+  $('qualityModal').hidden = true;
+
+  if (fluxoPrimeiraTransmissao) {
+    fluxoPrimeiraTransmissao = false;
+    ligarFonte('tela');
+  } else {
+    $('quality').focus();
+  }
+}
+
 $('quality').addEventListener('click', () => {
-  renderPerfis();
-  $('qualityModal').hidden = false;
-  document.querySelector(`[data-quality="${perfilAtual()}"]`)?.focus();
+  abrirQualidade({ primeiraVez: false });
 });
-$('qualityClose').addEventListener('click', fecharQualidade);
+$('qualityClose').addEventListener('click', confirmarQualidade);
+$('qualityCancel')?.addEventListener('click', fecharQualidade);
 $('qualityModal').addEventListener('click', (e) => {
   if (e.target === $('qualityModal')) fecharQualidade();
 });
@@ -2220,12 +2271,7 @@ function stopMyBroadcast(fonte = null) {
   }
 }
 
-// ---------------------------------------- Modal de Compartilhamento estilo Discord
-
-let ssSelectedResolution = '1080';
-let ssSelectedFps = 60;
-
-function abrirDiscordScreenShare() {
+$('share').addEventListener('click', () => {
   if (!session) return;
 
   if (minhasFontes().has('tela') || myBroadcast) {
@@ -2242,103 +2288,32 @@ function abrirDiscordScreenShare() {
     return;
   }
 
-  // Nome do canal ativo ou sala atual
-  const nomeSala = $('roomPill')?.textContent?.trim() || (inDiscord ? 'Geral' : 'Team Lemon');
-  if ($('ssChannelName')) $('ssChannelName').textContent = nomeSala;
-
-  if (ajustes.fps) ssSelectedFps = ajustes.fps;
-  if (ajustes.bitrate >= 8_000_000) ssSelectedResolution = '1440';
-  else if (ajustes.bitrate >= 5_000_000) ssSelectedResolution = '1080';
-  else ssSelectedResolution = '720';
-
-  aplicarPillsQualidadeSS();
-  $('screenShareModal').hidden = false;
-}
-
-function fecharDiscordScreenShare() {
-  $('screenShareModal').hidden = true;
-  $('share').focus();
-}
-
-function aplicarPillsQualidadeSS() {
-  for (const pill of document.querySelectorAll('#ssResolutionPills .discord-ss-pill')) {
-    const ativa = pill.dataset.res === ssSelectedResolution;
-    pill.classList.toggle('active', ativa);
-    pill.setAttribute('aria-checked', String(ativa));
+  // Na primeira vez que a pessoa for transmitir, pede para escolher a qualidade
+  if (!read('qualidade_configurada')) {
+    abrirQualidade({ primeiraVez: true });
+    return;
   }
-  for (const pill of document.querySelectorAll('#ssFpsPills .discord-ss-pill')) {
-    const ativa = Number(pill.dataset.fps) === ssSelectedFps;
-    pill.classList.toggle('active', ativa);
-    pill.setAttribute('aria-checked', String(ativa));
-  }
-}
-
-function calcularBitrateSS(res, fps) {
-  if (fps === 60) {
-    if (res === '1440' || res === 'source') return 8_000_000;
-    if (res === '1080') return 6_000_000;
-    return 3_000_000;
-  }
-  if (fps === 30) {
-    if (res === '1440' || res === 'source') return 5_000_000;
-    if (res === '1080') return 3_000_000;
-    return 1_800_000;
-  }
-  if (res === '1440' || res === 'source') return 3_000_000;
-  if (res === '1080') return 2_000_000;
-  return 1_000_000;
-}
-
-function executarGoLiveSS() {
-  fecharDiscordScreenShare();
-
-  const bitrate = calcularBitrateSS(ssSelectedResolution, ssSelectedFps);
-  ajustes = { bitrate, fps: ssSelectedFps };
-  store('ajustes', JSON.stringify(ajustes));
-  renderPerfis();
-  ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
-  myBroadcast?.setQuality(ajustes);
 
   ligarFonte('tela');
-}
-
-$('share').addEventListener('click', abrirDiscordScreenShare);
-
-$('ssClose')?.addEventListener('click', fecharDiscordScreenShare);
-$('ssCancel')?.addEventListener('click', fecharDiscordScreenShare);
-$('ssGoLive')?.addEventListener('click', executarGoLiveSS);
-
-$('screenShareModal')?.addEventListener('click', (e) => {
-  if (e.target === $('screenShareModal')) fecharDiscordScreenShare();
 });
 
-$('ssQualityPreset')?.addEventListener('change', (e) => {
-  const preset = e.target.value;
-  if (preset === 'smoother') {
-    ssSelectedResolution = '1080';
-    ssSelectedFps = 60;
-  } else if (preset === 'better_text') {
-    ssSelectedResolution = '1440';
-    ssSelectedFps = 30;
+$('changeScreen')?.addEventListener('click', async () => {
+  if (myBroadcast) {
+    try {
+      await myBroadcast.changeScreen();
+      toast('Tela alterada com sucesso.');
+    } catch (err) {
+      if (err.name !== 'NotAllowedError') {
+        toast(`Erro ao trocar tela: ${err.message}`, true);
+      }
+    }
+    return;
   }
-  aplicarPillsQualidadeSS();
+
+  if (minhasFontes().has('tela')) {
+    trazerAba('tela');
+  }
 });
-
-for (const pill of document.querySelectorAll('#ssResolutionPills .discord-ss-pill')) {
-  pill.addEventListener('click', () => {
-    ssSelectedResolution = pill.dataset.res;
-    if ($('ssQualityPreset')) $('ssQualityPreset').value = 'custom';
-    aplicarPillsQualidadeSS();
-  });
-}
-
-for (const pill of document.querySelectorAll('#ssFpsPills .discord-ss-pill')) {
-  pill.addEventListener('click', () => {
-    ssSelectedFps = Number(pill.dataset.fps);
-    if ($('ssQualityPreset')) $('ssQualityPreset').value = 'custom';
-    aplicarPillsQualidadeSS();
-  });
-}
 
 $('camera').addEventListener('click', () => {
   if (!session) return;
@@ -2594,14 +2569,7 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
-  for (const id of [
-    'screenShareModal',
-    'qualityModal',
-    'profileModal',
-    'roomModal',
-    'joinModal',
-    'createModal',
-  ]) {
+  for (const id of ['qualityModal', 'profileModal', 'roomModal', 'joinModal', 'createModal']) {
     if (!$(id).hidden) {
       $(id).hidden = true;
       return;

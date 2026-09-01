@@ -428,14 +428,6 @@ function criarPainel(fonte) {
         el('bitrate').textContent = `${s.mbps.toFixed(1)} Mb/s`;
         el('elapsed').textContent =
           `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
-
-        if ($('liveViewers')) $('liveViewers').textContent = s.viewers;
-        if ($('liveFps')) $('liveFps').textContent = `${s.fps} fps`;
-        if ($('liveBitrate')) $('liveBitrate').textContent = `${s.mbps.toFixed(1)} Mb/s`;
-        if ($('liveElapsed')) {
-          $('liveElapsed').textContent =
-            `${String(Math.floor(s.seconds / 60)).padStart(2, '0')}:${String(s.seconds % 60).padStart(2, '0')}`;
-        }
       },
       onAviso: (msg) => {
         if (msg === 'Áudio isolado do Firefox ligado.') {
@@ -449,22 +441,21 @@ function criarPainel(fonte) {
         broadcaster = null;
         if (fonte === 'tela') $('tela-recovery').hidden = true;
         mostrarSetup();
-        $('liveView').hidden = true;
-        $('stepSource').hidden = false;
-        $('stepSettings').hidden = true;
         setStatus(reason);
       },
       onTrackEnded: () => {
         if (fonte === 'tela') {
           $('tela-recovery').hidden = false;
-          if ($('recoveryView')) $('recoveryView').hidden = false;
         } else {
+          // Câmera desconectada (cabo puxado, etc)
           if (broadcaster) broadcaster.stop('A câmera foi desconectada.');
         }
       },
       nativeAudioProof,
     });
 
+    // O broadcaster assume as faixas daqui para a frente, então a referência sai
+    // sem pará-las — pará-las seria desligar o que acabou de ir ao ar.
     previa = null;
     el('previa').srcObject = null;
     el('previa').hidden = true;
@@ -478,20 +469,15 @@ function criarPainel(fonte) {
         .catch(() => {});
       el('setup').hidden = true;
       el('live').hidden = false;
-
-      $('stepSource').hidden = true;
-      $('stepSettings').hidden = true;
-      $('liveView').hidden = false;
-      if ($('livePreview')) {
-        $('livePreview').srcObject = stream;
-        $('livePreview').play().catch(() => {});
-      }
-
+      // A tela sempre pede som, e a caixa do seletor pode ter ficado desmarcada:
+      // a saída fica à mão desde o início, em vez de só depois de um aviso.
       if (!camera) $('somAba').hidden = false;
       chamar(null);
     } catch (err) {
       broadcaster = null;
       el('start').disabled = false;
+      // NotAllowedError quer dizer coisas diferentes nas duas fontes: na tela é
+      // quase sempre cancelar o seletor; na câmera é a permissão negada.
       const negado = camera
         ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
         : 'Você cancelou a seleção de tela.';
@@ -513,6 +499,18 @@ function criarPainel(fonte) {
     broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.'),
   );
   if (!camera) {
+    $('tela-change')?.addEventListener('click', async () => {
+      if (!broadcaster) return;
+      try {
+        await broadcaster.changeScreen();
+        setStatus('Tela alterada com sucesso.');
+      } catch (err) {
+        if (err.name !== 'NotAllowedError') {
+          setStatus(`Erro ao trocar tela: ${err.message}`, 'error');
+        }
+      }
+    });
+
     $('tela-recover-btn').addEventListener('click', async () => {
       if (!broadcaster) return;
       $('tela-recovery').hidden = true;
@@ -524,23 +522,6 @@ function criarPainel(fonte) {
         }
         $('tela-recovery').hidden = false;
       }
-    });
-
-    $('btnRecover')?.addEventListener('click', async () => {
-      if (!broadcaster) return;
-      $('recoveryView').hidden = true;
-      try {
-        await broadcaster.changeScreen();
-      } catch (err) {
-        if (err.name !== 'NotAllowedError') {
-          setStatus(`Erro ao recuperar tela: ${err.message}`, 'error');
-        }
-        $('recoveryView').hidden = false;
-      }
-    });
-
-    $('btnStopLive')?.addEventListener('click', () => {
-      broadcaster?.stop('Transmissão encerrada.');
     });
   }
 
@@ -566,6 +547,7 @@ function criarPainel(fonte) {
     indisponivel: () => Boolean(indisponivel),
     aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
+    // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
     parar: () => {
       broadcaster?.stop();
       pararPrevia();
@@ -577,79 +559,10 @@ function criarPainel(fonte) {
 // ------------------------------------------------------------------ arranque
 
 const payload = token && readTokenPayload();
+// Firefox recente usa o fallback via <video>. Ele pode custar mais CPU que o
+// caminho direto do Chromium, mas bloquear uma capacidade real era pior do que
+// oferecer o modo compatível e explicar a diferença.
 const missing = supportError();
-
-function calcularBitrateSS(res, fps) {
-  if (fps === 60) {
-    if (res === '1440' || res === 'source') return 8_000_000;
-    if (res === '1080') return 6_000_000;
-    return 3_000_000;
-  }
-  if (fps === 30) {
-    if (res === '1440' || res === 'source') return 5_000_000;
-    if (res === '1080') return 3_000_000;
-    return 1_800_000;
-  }
-  if (res === '1440' || res === 'source') return 3_000_000;
-  if (res === '1080') return 2_000_000;
-  return 1_000_000;
-}
-
-let ssSelectedResolution = '1080';
-let ssSelectedFps = 60;
-
-function setupDiscordSSUI() {
-  if (payload?.name && $('channelName')) {
-    $('channelName').textContent = `Canal de ${payload.name}`;
-  }
-
-  for (const pill of document.querySelectorAll('#resolutionPills .discord-ss-pill')) {
-    pill.addEventListener('click', () => {
-      for (const p of document.querySelectorAll('#resolutionPills .discord-ss-pill')) {
-        p.classList.toggle('active', p === pill);
-      }
-      ssSelectedResolution = pill.dataset.res;
-      if ($('qualityPreset')) $('qualityPreset').value = 'custom';
-      opcoes.bitrate = calcularBitrateSS(ssSelectedResolution, ssSelectedFps);
-    });
-  }
-
-  for (const pill of document.querySelectorAll('#fpsPills .discord-ss-pill')) {
-    pill.addEventListener('click', () => {
-      for (const p of document.querySelectorAll('#fpsPills .discord-ss-pill')) {
-        p.classList.toggle('active', p === pill);
-      }
-      ssSelectedFps = Number(pill.dataset.fps);
-      opcoes.fps = ssSelectedFps;
-      if ($('qualityPreset')) $('qualityPreset').value = 'custom';
-      opcoes.bitrate = calcularBitrateSS(ssSelectedResolution, ssSelectedFps);
-    });
-  }
-
-  $('qualityPreset')?.addEventListener('change', (e) => {
-    if (e.target.value === 'smoother') {
-      ssSelectedResolution = '1080';
-      ssSelectedFps = 60;
-    } else if (e.target.value === 'better_text') {
-      ssSelectedResolution = '1440';
-      ssSelectedFps = 30;
-    }
-    opcoes.fps = ssSelectedFps;
-    opcoes.bitrate = calcularBitrateSS(ssSelectedResolution, ssSelectedFps);
-    for (const p of document.querySelectorAll('#resolutionPills .discord-ss-pill')) {
-      p.classList.toggle('active', p.dataset.res === ssSelectedResolution);
-    }
-    for (const p of document.querySelectorAll('#fpsPills .discord-ss-pill')) {
-      p.classList.toggle('active', Number(p.dataset.fps) === ssSelectedFps);
-    }
-  });
-
-  $('btnGoLive')?.addEventListener('click', () => {
-    paineis.tela?.ligar();
-  });
-}
-
-setupDiscordSSUI();
 
 if (!payload) {
   falhar('Link inválido.', 'Volte à atividade no Discord e clique em compartilhar novamente.');

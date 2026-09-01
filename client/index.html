@@ -128,7 +128,22 @@
               aria-label="Compartilhar tela"
             >
               <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path fill-rule="evenodd" clip-rule="evenodd" d="M3 4C1.89543 4 1 4.89543 1 6V16C1 17.1046 1.89543 18 3 18H10V20H7C6.44772 20 6 20.4477 6 21C6 21.5523 6.44772 22 7 22H17C17.5523 22 18 21.5523 18 21C18 20.4477 17.5523 20 17 20H14V18H21C22.1046 18 23 17.1046 23 16V6C23 4.89543 22.1046 4 21 4H3ZM3 6H21V16H3V6ZM14.7071 8.70711C15.0976 8.31658 15.0976 7.68342 14.7071 7.29289C14.3166 6.90237 13.6834 6.90237 13.2929 7.29289L9.29289 11.2929C8.90237 11.6834 8.90237 12.3166 9.29289 12.7071L13.2929 16.7071C13.6834 17.0976 14.3166 17.0976 14.7071 16.7071C15.0976 16.3166 15.0976 15.6834 14.7071 15.2929L12.4142 13H17C17.5523 13 18 12.5523 18 12C18 11.4477 17.5523 11 17 11H12.4142L14.7071 8.70711Z"/>
+                <path d="M3 5h18v11H3z" />
+                <path d="M8 20h8" />
+              </svg>
+            </button>
+            <button
+              id="changeScreen"
+              class="btn"
+              data-tip="Trocar de tela ou janela"
+              aria-label="Trocar de tela ou janela"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M4 6h16v10H4z" />
+                <path d="M9 20h6" />
+                <path d="m14 9 3 3-3 3" />
+                <path d="M7 12h10" />
               </svg>
             </button>
             <button id="camera" class="btn" data-tip="Ligar câmera" aria-label="Ligar câmera">
@@ -260,220 +275,35 @@
         </div>
       </div>
 
-      <!-- Modal de Compartilhamento de Tela estilo Discord -->
-      <div id="screenShareModal" class="modal" hidden>
-        <div class="modal-card discord-ss-modal" role="dialog" aria-modal="true" aria-labelledby="ssTitle">
-          <!-- Top Banner com Ilustração Clássica do Discord -->
-          <div class="discord-ss-banner">
-            <button id="ssClose" class="discord-ss-close" type="button" title="Fechar" aria-label="Fechar">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
-                <path d="M18.4 4L12 10.4L5.6 4L4 5.6L10.4 12L4 18.4L5.6 20L12 13.6L18.4 20L20 18.4L13.6 12L20 5.6L18.4 4Z"/>
-              </svg>
-            </button>
-            <svg class="discord-ss-artwork" viewBox="0 0 460 110" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="110" gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stop-color="#232428" stop-opacity="0.95"/>
-                  <stop offset="100%" stop-color="#313338"/>
-                </linearGradient>
-                <linearGradient id="wumpusGrad" x1="200" y1="20" x2="260" y2="90" gradientUnits="userSpaceOnUse">
-                  <stop offset="0%" stop-color="#8593ff"/>
-                  <stop offset="100%" stop-color="#5865f2"/>
-                </linearGradient>
-              </defs>
-              <!-- Fundo escuro do banner -->
-              <rect width="460" height="110" fill="url(#bgGrad)"/>
-              
-              <!-- Estrelas e faíscas de celebração no fundo -->
-              <circle cx="95" cy="28" r="2.5" fill="#faa61a" opacity="0.8"/>
-              <path d="M95 20 L96 25 L101 26 L96 27 L95 32 L94 27 L89 26 L94 25 Z" fill="#faa61a" opacity="0.9"/>
-              <circle cx="360" cy="24" r="2" fill="#fee75c" opacity="0.7"/>
-              <path d="M358 18 L359 22 L363 23 L359 24 L358 28 L357 24 L353 23 L357 22 Z" fill="#fee75c" opacity="0.9"/>
-              <circle cx="160" cy="18" r="1.5" fill="#ffffff" opacity="0.6"/>
-              <circle cx="305" cy="16" r="2" fill="#5865f2" opacity="0.8"/>
-              <circle cx="380" cy="40" r="1.5" fill="#f47b67" opacity="0.7"/>
-              <circle cx="80" cy="50" r="2" fill="#57f287" opacity="0.6"/>
-
-              <!-- Arco sutil atrás do sofá -->
-              <path d="M120 95 C120 40, 340 40, 340 95 Z" fill="#3b3e45" opacity="0.45"/>
-
-              <!-- Sofá / Couch branco do Discord -->
-              <!-- Encosto do sofá -->
-              <rect x="135" y="44" width="190" height="42" rx="10" fill="#e3e5e8"/>
-              <path d="M140 48 C140 45, 145 44, 155 44 L305 44 C315 44, 320 45, 320 48 L320 80 L140 80 Z" fill="#ffffff"/>
-              <!-- Divisórias das almofadas do sofá -->
-              <line x1="195" y1="44" x2="195" y2="82" stroke="#d1d5db" stroke-width="2"/>
-              <line x1="265" y1="44" x2="265" y2="82" stroke="#d1d5db" stroke-width="2"/>
-              <!-- Braço esquerdo do sofá -->
-              <rect x="125" y="52" width="22" height="34" rx="8" fill="#f2f3f5"/>
-              <!-- Braço direito do sofá -->
-              <rect x="313" y="52" width="22" height="34" rx="8" fill="#f2f3f5"/>
-              <!-- Assento do sofá -->
-              <rect x="130" y="74" width="200" height="18" rx="6" fill="#ebedef"/>
-              <!-- Pés do sofá -->
-              <rect x="145" y="90" width="8" height="6" rx="2" fill="#232428"/>
-              <rect x="307" y="90" width="8" height="6" rx="2" fill="#232428"/>
-
-              <!-- Personagem preto esquerdo (silhueta comemorando com fogueira/faísca) -->
-              <circle cx="160" cy="38" r="7" fill="#18191c"/>
-              <rect x="154" y="44" width="12" height="22" rx="6" fill="#18191c"/>
-              <!-- Braços levantados -->
-              <path d="M152 48 Q144 40 148 32" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
-              <path d="M166 48 Q174 44 172 36" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
-              <!-- Faísca de comemoração na mão -->
-              <path d="M148 30 L150 24 L146 20 L143 25 Z" fill="#faa61a"/>
-              <circle cx="147" cy="23" r="2.5" fill="#fee75c"/>
-
-              <!-- Personagem central: WUMPUS azul no sofá -->
-              <!-- Corpo e orelhas do Wumpus -->
-              <path d="M214 26 C214 16, 246 16, 246 26 C256 26, 260 38, 258 54 C256 70, 250 82, 230 82 C210 82, 204 70, 202 54 C200 38, 204 26, 214 26 Z" fill="url(#wumpusGrad)"/>
-              <!-- Orelha esquerda -->
-              <ellipse cx="214" cy="24" rx="4" ry="7" fill="#6d7bf5" transform="rotate(-20 214 24)"/>
-              <!-- Orelha direita -->
-              <ellipse cx="246" cy="24" rx="4" ry="7" fill="#6d7bf5" transform="rotate(20 246 24)"/>
-              <!-- Olhos do Wumpus -->
-              <ellipse cx="222" cy="42" rx="3" ry="4.5" fill="#18191c"/>
-              <ellipse cx="238" cy="42" rx="3" ry="4.5" fill="#18191c"/>
-              <circle cx="223" cy="40.5" r="1.2" fill="#ffffff"/>
-              <circle cx="239" cy="40.5" r="1.2" fill="#ffffff"/>
-              <!-- Focinho / Nariz e boca fofa do Wumpus -->
-              <ellipse cx="230" cy="50" rx="7" ry="5" fill="#b0b8ff"/>
-              <ellipse cx="227.5" cy="49" rx="1.2" ry="1.8" fill="#5865f2"/>
-              <ellipse cx="232.5" cy="49" rx="1.2" ry="1.8" fill="#5865f2"/>
-              <path d="M228 52 Q230 54 232 52" stroke="#5865f2" stroke-width="1.2" stroke-linecap="round" fill="none"/>
-              <!-- Mãos do Wumpus segurando a tigela -->
-              <ellipse cx="218" cy="62" rx="4" ry="3" fill="#8593ff"/>
-              <ellipse cx="242" cy="62" rx="4" ry="3" fill="#8593ff"/>
-
-              <!-- Tigela de Pipoca (verde-água) -->
-              <path d="M260 62 C260 62, 263 76, 280 76 C297 76, 300 62, 300 62 Z" fill="#57f287"/>
-              <ellipse cx="280" cy="62" rx="20" ry="4" fill="#3ba55d"/>
-              <!-- Pipocas na tigela -->
-              <circle cx="270" cy="57" r="4.5" fill="#fee75c"/>
-              <circle cx="277" cy="55" r="5" fill="#ffffff"/>
-              <circle cx="285" cy="56" r="4.5" fill="#fee75c"/>
-              <circle cx="291" cy="59" r="3.5" fill="#ffffff"/>
-              <circle cx="273" cy="52" r="3.5" fill="#fee75c"/>
-              <circle cx="281" cy="51" r="4" fill="#fee75c"/>
-              <!-- Pipoca voando -->
-              <circle cx="266" cy="46" r="2.5" fill="#fee75c"/>
-
-              <!-- Personagem preto direito (comendo pipoca feliz) -->
-              <circle cx="304" cy="42" r="6.5" fill="#18191c"/>
-              <rect x="298" y="48" width="12" height="20" rx="5" fill="#18191c"/>
-              <!-- Braço pegando pipoca -->
-              <path d="M298 52 Q288 50 284 54" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
-              <circle cx="283" cy="53" r="2" fill="#fee75c"/>
-              <!-- Pipoca na outra mão comemorando -->
-              <path d="M310 52 Q318 46 316 40" stroke="#18191c" stroke-width="3" stroke-linecap="round" fill="none"/>
-              <circle cx="316" cy="38" r="3" fill="#fee75c"/>
-            </svg>
-          </div>
-
-          <!-- Cabeçalho do Modal -->
-          <div class="discord-ss-header">
-            <h2 id="ssTitle" class="discord-ss-title">Compartilhar tela</h2>
-            <p id="ssSubtitle" class="discord-ss-subtitle">Escolha a qualidade da transmissão e selecione sua tela ou janela.</p>
-          </div>
-
-          <!-- Configurações da Transmissão -->
-          <div class="discord-ss-settings-body">
-            <!-- CANAL DE TRANSMISSÃO -->
-            <div class="discord-ss-section">
-              <div class="discord-ss-section-title">CANAL DE TRANSMISSÃO</div>
-              <div class="discord-ss-card-row">
-                <div class="discord-ss-channel-info">
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="#949ba4" class="discord-ss-speaker-icon">
-                    <path d="M11 5L6 9H2v6h4l5 4V5zm4.5 7c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM13 4.45v2.06c2.89.86 5 3.54 5 6.49s-2.11 5.63-5 6.49v2.06c4.01-.91 7-4.49 7-8.55s-2.99-7.64-7-8.55z"/>
-                  </svg>
-                  <span class="discord-ss-channel-emoji" id="ssChannelEmoji">🍋</span>
-                  <span class="discord-ss-channel-name" id="ssChannelName">Team Lemon</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- QUALIDADE DA TRANSMISSÃO -->
-            <div class="discord-ss-section">
-              <div class="discord-ss-section-title">QUALIDADE DA TRANSMISSÃO</div>
-              
-              <div class="discord-ss-select-wrap">
-                <select id="ssQualityPreset" class="discord-ss-select">
-                  <option value="smoother" selected>Vídeo mais fluido (1080p · 60 FPS)</option>
-                  <option value="better_text">Texto mais nítido (1440p · 30 FPS)</option>
-                  <option value="custom">Personalizado</option>
-                </select>
-                <svg class="discord-ss-select-arrow" viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
-                  <path d="M7 10l5 5 5-5z"/>
-                </svg>
-              </div>
-
-              <!-- Botões Segmentados de Resolução -->
-              <div class="discord-ss-control-group">
-                <div class="discord-ss-control-label">RESOLUÇÃO</div>
-                <div class="discord-ss-pills" id="ssResolutionPills" role="radiogroup">
-                  <button type="button" class="discord-ss-pill" data-res="720" role="radio" aria-checked="false">720</button>
-                  <button type="button" class="discord-ss-pill active" data-res="1080" role="radio" aria-checked="true">1080</button>
-                  <button type="button" class="discord-ss-pill" data-res="1440" role="radio" aria-checked="false">1440</button>
-                  <button type="button" class="discord-ss-pill" data-res="source" role="radio" aria-checked="false">ORIGINAL</button>
-                </div>
-              </div>
-
-              <!-- Botões Segmentados de Taxa de Quadros -->
-              <div class="discord-ss-control-group">
-                <div class="discord-ss-control-label">TAXA DE QUADROS</div>
-                <div class="discord-ss-pills" id="ssFpsPills" role="radiogroup">
-                  <button type="button" class="discord-ss-pill" data-fps="15" role="radio" aria-checked="false">15</button>
-                  <button type="button" class="discord-ss-pill" data-fps="30" role="radio" aria-checked="false">30</button>
-                  <button type="button" class="discord-ss-pill active" data-fps="60" role="radio" aria-checked="true">60</button>
-                </div>
-              </div>
-
-              <div class="discord-ss-note-warning">
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="#949ba4">
-                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/>
-                </svg>
-                <span>Ao clicar em <strong>Entrar ao vivo</strong>, selecione sua tela ou janela no diálogo do sistema.</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Rodapé -->
-          <div class="discord-ss-footer">
-            <button type="button" id="ssCancel" class="discord-ss-btn-cancel">Cancelar</button>
-            <button type="button" id="ssGoLive" class="discord-ss-btn-golive">Entrar ao vivo</button>
-          </div>
-
-        </div>
-      </div>
-
       <div id="qualityModal" class="modal" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="qualityTitle">
           <h2 id="qualityTitle">Qualidade da transmissão</h2>
-          <p class="modal-sub">
+          <p id="qualitySub" class="modal-sub">
             A opção equilibrada é a melhor para a maioria. 60 fps exige mais upload e codificação
             por hardware.
           </p>
 
           <div class="quality-options" role="radiogroup" aria-label="Perfil de qualidade">
             <button type="button" class="quality-option" data-quality="leve" role="radio">
-              <strong>Leve</strong><span>1,5 Mb/s · 30 fps</span>
+              <strong>Leve</strong><span>720p · 30 fps (1,5 Mb/s)</span>
             </button>
             <button type="button" class="quality-option" data-quality="equilibrado" role="radio">
-              <strong>Equilibrado</strong><span>2,5 Mb/s · 30 fps</span>
+              <strong>Equilibrado</strong><span>1080p · 30 fps (2,5 Mb/s)</span>
             </button>
             <button type="button" class="quality-option" data-quality="nitido" role="radio">
-              <strong>Nítido</strong><span>5 Mb/s · 60 fps</span>
+              <strong>Nítido</strong><span>1080p · 60 fps (5 Mb/s)</span>
             </button>
             <button type="button" class="quality-option" data-quality="maximo" role="radio">
-              <strong>Máximo</strong><span>8 Mb/s · 60 fps</span>
+              <strong>Máximo</strong><span>1080p · 60 fps (8 Mb/s)</span>
             </button>
           </div>
 
-          <p class="quality-hint">
+          <p id="qualityHint" class="quality-hint">
             A resolução é limitada a 1080p. O navegador reduz quadros automaticamente se o
             computador não acompanhar.
           </p>
           <div class="modal-actions">
+            <button id="qualityCancel" class="btn" hidden>Cancelar</button>
             <button id="qualityClose" class="btn go">Concluir</button>
           </div>
         </div>
