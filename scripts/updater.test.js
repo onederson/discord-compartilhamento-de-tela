@@ -33,9 +33,9 @@ afterEach(() => {
 
 describe('atualizador conservador', () => {
   it('normaliza as duas formas usuais da origem oficial', () => {
-    expect(normalizarOrigem('https://github.com/DevilNine/discord-compartilhamento-de-tela.git')).toBe(
-      'github.com/devilnine/discord-compartilhamento-de-tela',
-    );
+    expect(
+      normalizarOrigem('https://github.com/DevilNine/discord-compartilhamento-de-tela.git'),
+    ).toBe('github.com/devilnine/discord-compartilhamento-de-tela');
     expect(normalizarOrigem('git@github.com:DevilNine/discord-compartilhamento-de-tela.git')).toBe(
       'github.com/devilnine/discord-compartilhamento-de-tela',
     );
@@ -53,7 +53,13 @@ describe('atualizador conservador', () => {
     const raiz = tmp();
     git(raiz, 'init');
     commit(raiz, 'arquivo.txt', 'base', 'base');
-    git(raiz, 'remote', 'add', 'origin', 'https://github.com/DevilNine/discord-compartilhamento-de-tela.git');
+    git(
+      raiz,
+      'remote',
+      'add',
+      'origin',
+      'https://github.com/DevilNine/discord-compartilhamento-de-tela.git',
+    );
     fs.writeFileSync(path.join(raiz, 'arquivo.txt'), 'mudança local');
 
     expect(atualizarCheckout({ raiz })).toEqual({ status: 'alterado' });

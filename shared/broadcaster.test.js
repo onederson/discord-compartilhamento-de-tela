@@ -640,6 +640,11 @@ describe('conexão', () => {
     // Com reconexão automática, a transmissão não morre de imediato.
     expect(b.isRunning()).toBe(true);
     expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/Reconectando/));
+    expect(onEnd).not.toHaveBeenCalled();
+
+    // Encerra antes que o timer de reconexão dispare sobre os próximos testes.
+    b.stop();
+    expect(b.isRunning()).toBe(false);
   });
 
   it('ignora o que chega no socket e não é texto', async () => {

@@ -788,7 +788,7 @@ app.post('/api/logs', (req, res) => {
     entry = { windowStart: now, count: 0 };
     logAttempts.set(ip, entry);
   }
-  
+
   if (entry.count > 100) return res.status(429).end(); // máximo de 100 logs por minuto por ip
   entry.count++;
 
@@ -797,10 +797,10 @@ app.post('/api/logs', (req, res) => {
 
   const timestamp = new Date().toISOString();
   const logLine = `[${timestamp}] [${level || 'error'}] ${message} ${details ? JSON.stringify(details) : ''}\n`;
-  
+
   // Escreve no log assincronamente sem travar o servidor
   fs.appendFile(path.join(__dirname, '..', 'client-errors.log'), logLine, () => {});
-  
+
   res.json({ ok: true });
 });
 

@@ -54,6 +54,10 @@ const RECONNECT_BASE_MS = 1000;
 // tráfego na conexão.
 const KEEPALIVE_INTERVAL_MS = 10_000;
 
+// Sem quadro novo por este tempo, a captura travou — no Windows, quase sempre
+// um jogo OpenGL/Vulkan em foco cujo driver parou de entregar quadros.
+const STALL_ALERT_MS = 5000;
+
 // Tipos do primeiro byte útil de cada pacote. O áudio anda pelo mesmo socket e
 // pelo mesmo cabeçalho do vídeo: um canal só, um formato só, e o servidor
 // continua repassando o buffer sem precisar abrir nada.
@@ -75,8 +79,12 @@ const OUTPUT_LIMITS = [
   { width: 1280, height: 720 },
 ];
 const MIN_WS_BUFFER = 128 * 1024;
+const MIN_ADAPTIVE_BITRATE = 1_200_000;
+const NETWORK_BAD_WINDOWS = 2;
+const NETWORK_GOOD_WINDOWS = 6;
 
 const even = (n) => Math.max(2, n - (n % 2));
+const screenContentHint = (fps) => (fps >= 50 ? 'motion' : 'text');
 
 const captureConstraints = (fps, maxWidth = MAX_W, maxHeight = MAX_H) => ({
   width: { ideal: maxWidth, max: maxWidth },
@@ -141,6 +149,7 @@ export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
     // continua explícita no seletor do navegador; quem não marcar a caixa
     // recebe somente vídeo.
     opts.systemAudio = 'include';
+    opts.audioSelection = 'include';
   }
   return opts;
 }
@@ -193,6 +202,7 @@ export function fonteIndisponivel(fonte) {
  * @param {(stats:object)=>void} [opts.onStats]  viewers, fps, mbps, segundos no ar
  * @param {(reason:string)=>void} [opts.onEnd]   encerrou (por qualquer motivo)
  * @param {(msg:string)=>void} [opts.onAviso]    algo mudou sem ser erro
+ * @param {()=>Promise<string>} [opts.nativeAudioProof] prova do companion local
  */
 export function createBroadcaster({
   wsUrl,
@@ -209,6 +219,9 @@ export function createBroadcaster({
   onStats,
   onEnd,
   onAviso,
+  nativeAudioProof,
+  // Quando informado, a faixa de vídeo encerrada pelo navegador não derruba a
+  // transmissão: a interface decide se oferece escolher a tela de novo.
   onTrackEnded,
 }) {
   let ws = null;
@@ -218,6 +231,7 @@ export function createBroadcaster({
   let audioEncoder = null;
   let audioReader = null;
   let nativeAudio = false;
+  let nativeAudioRequesting = false;
   // Pediram som, mas a superfície escolhida traria o Discord junto. Guardado
   // para a interface poder oferecer a saída em vez de só avisar e esquecer.
   let somBloqueado = false;
@@ -247,65 +261,48 @@ export function createBroadcaster({
   let networkDrops = 0;
   let outputLimitIndex = 0;
   let networkPressureWindows = 0;
+  let networkHealthyWindows = 0;
+  let requestedBitrate = bitrate;
   let relayCongestion = false;
   let displaySurface = null;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
   let keepaliveTimer = null;
-  // Guarda a config e audioConfig mais recentes para reenviar após reconexão.
+  // Config e audioConfig mais recentes, para reenviar depois de reconectar.
   let lastSentConfig = null;
   let lastSentAudioConfig = null;
   let wakeLock = null;
-  let antiSleepAudioCtx = null;
 
-  async function startAntiSleep() {
-    try {
-      if ('wakeLock' in navigator) {
-        wakeLock = await navigator.wakeLock.request('screen').catch(() => null);
-      }
-    } catch { /* sem wake lock a transmissão segue; só perde a trava de tela */ }
-
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (AudioCtx) {
-        antiSleepAudioCtx = new AudioCtx();
-        const osc = antiSleepAudioCtx.createOscillator();
-        const gain = antiSleepAudioCtx.createGain();
-        osc.frequency.value = 1;
-        gain.gain.value = 0.00001;
-        osc.connect(gain);
-        gain.connect(antiSleepAudioCtx.destination);
-        osc.start();
-        if (antiSleepAudioCtx.state === 'suspended') {
-          antiSleepAudioCtx.resume().catch(() => {});
-        }
-      }
-    } catch { /* áudio anti-suspensão é opcional */ }
+  /** Impede a tela de apagar no meio da transmissão; falhar aqui é inofensivo. */
+  async function startWakeLock() {
+    wakeLock = (await navigator.wakeLock?.request?.('screen').catch(() => null)) ?? null;
   }
 
-  function stopAntiSleep() {
-    try {
-      wakeLock?.release()?.catch?.(() => {});
-      wakeLock = null;
-    } catch { /* já liberado */ }
-    try {
-      antiSleepAudioCtx?.close()?.catch?.(() => {});
-      antiSleepAudioCtx = null;
-    } catch { /* já fechado */ }
+  function stopWakeLock() {
+    wakeLock?.release?.().catch?.(() => {});
+    wakeLock = null;
   }
 
-  function createEncoder() {
-    if (encoder && encoder.state !== 'closed') {
-      try { encoder.close(); } catch { /* o navegador pode já ter fechado */ }
+  function avisarTravamento() {
+    if (!running) return;
+    onAviso?.(
+      'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
+    );
+    console.error('Captura de vídeo parou de emitir quadros.');
+  }
+
+  /** Lê a lista de quem assiste a partir do `state`, quando o servidor a manda. */
+  function lerEstado(msg) {
+    const meu =
+      mySlot !== null && Array.isArray(msg.streams)
+        ? msg.streams.find((s) => s.slot === mySlot)
+        : null;
+    if (Array.isArray(meu?.watchers)) {
+      watchers = meu.watchers;
+      viewers = watchers.length;
+    } else {
+      viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
     }
-    encoder = new VideoEncoder({
-      output: onEncoded,
-      error: (err) => {
-        console.warn(`[encoder error] ${err.message}, recriando...`);
-      },
-    });
-    encoder.configure(config);
-    wantKeyframe = true;
   }
 
   async function start() {
@@ -315,23 +312,22 @@ export function createBroadcaster({
 
     const track = stream.getVideoTracks()[0];
     displaySurface = track.getSettings?.().displaySurface ?? null;
-    track.contentHint = 'motion';
+    // Tela é texto e interface, onde suavizar borra o que importa. Câmera é
+    // vídeo natural, e aí suavizar é justamente o certo.
+    track.contentHint = fonte === 'camera' ? 'motion' : screenContentHint(fps);
     track.addEventListener('ended', () => {
-      if (onTrackEnded) {
-        onTrackEnded();
-      } else {
-        stop(
-          fonte === 'camera'
-            ? 'A câmera foi desligada.'
-            : 'Você parou o compartilhamento pelo navegador.'
-        );
-      }
+      if (onTrackEnded) return onTrackEnded();
+      stop(
+        fonte === 'camera'
+          ? 'A câmera foi desligada.'
+          : 'Você parou o compartilhamento pelo navegador.',
+      );
     });
 
     // Reduzir uma captura 4K no canvas a cada quadro é especialmente caro no
     // Firefox. Reaplica o teto depois da escolha para o navegador/Windows fazer
     // o redimensionamento na origem, inclusive quando o stream veio da prévia.
-    if (fonte === 'tela') await track.applyConstraints?.(captureConstraints(fps)).catch(() => { });
+    if (fonte === 'tela') await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
 
     const s = track.getSettings();
     const target = fitWithin(s.width ?? 1280, s.height ?? 720);
@@ -344,7 +340,11 @@ export function createBroadcaster({
 
     await connect();
 
-    createEncoder();
+    encoder = new VideoEncoder({
+      output: onEncoded,
+      error: (err) => stop(`Erro no encoder: ${err.message}`),
+    });
+    encoder.configure(config);
 
     ws.send(JSON.stringify({ type: 'start' }));
 
@@ -386,7 +386,7 @@ export function createBroadcaster({
       networkDrops = 0;
     }, 1000);
 
-    startAntiSleep();
+    startWakeLock();
     pump(track);
     // Pedir áudio não garante receber: em vários sistemas a caixa "compartilhar
     // o som" fica desmarcada, e o navegador devolve a tela sem faixa de som.
@@ -616,7 +616,7 @@ export function createBroadcaster({
 
     // Encerra o laço anterior antes de abrir outro, senão os dois alimentam o
     // mesmo encoder e a fila estoura.
-    await audioReader?.cancel().catch(() => { });
+    await audioReader?.cancel().catch(() => {});
     audioReader = null;
     if (audioEncoder?.state === 'configured') {
       try {
@@ -679,14 +679,8 @@ export function createBroadcaster({
     }
 
     // O mesmo caminho do vídeo: quem chega depois recebe isto ao pedir a tela.
-    const audioConf = { codec: 'opus', sampleRate, numberOfChannels };
-    lastSentAudioConfig = audioConf;
-    ws?.send(
-      JSON.stringify({
-        type: 'audio-config',
-        config: audioConf,
-      }),
-    );
+    lastSentAudioConfig = { codec: 'opus', sampleRate, numberOfChannels };
+    ws?.send(JSON.stringify({ type: 'audio-config', config: lastSentAudioConfig }));
 
     audioReader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     while (running) {
@@ -723,11 +717,25 @@ export function createBroadcaster({
     return /Firefox\//i.test(navigator.userAgent) && !window.MediaStreamTrackProcessor;
   }
 
-  function requestNativeAudio() {
-    if (!running || ws?.readyState !== WebSocket.OPEN) return;
+  async function requestNativeAudio() {
+    if (!running || ws?.readyState !== WebSocket.OPEN || nativeAudioRequesting) return;
     nativeAudio = false;
-    ws.send(JSON.stringify({ type: 'native-audio-start', application: 'firefox' }));
+    nativeAudioRequesting = true;
     onAviso?.('Ligando o áudio isolado do Firefox…');
+    try {
+      if (!nativeAudioProof) {
+        throw new Error(
+          'O áudio isolado do Firefox exige a página externa no computador que está executando o INICIAR.',
+        );
+      }
+      const proof = await nativeAudioProof();
+      if (!running || ws?.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'native-audio-start', application: 'firefox', proof }));
+    } catch (err) {
+      onAviso?.(err.message || 'Não foi possível alcançar o capturador de áudio local.');
+    } finally {
+      nativeAudioRequesting = false;
+    }
   }
 
   async function pickConfig(width, height) {
@@ -762,30 +770,21 @@ export function createBroadcaster({
   /** Chromium: acesso direto aos quadros, sem cópia intermediária. */
   async function pumpDirect(track) {
     reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
-    let frameTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      onAviso?.('A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.');
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
-    
+    let stallTimer = null;
     while (running) {
       let frame;
       try {
-        clearTimeout(frameTimeout);
-        frameTimeout = setTimeout(alertStuck, 5000);
-        
+        clearTimeout(stallTimer);
+        stallTimer = setTimeout(avisarTravamento, STALL_ALERT_MS);
         const { done, value } = await reader.read();
-        
         if (done) break;
         frame = value;
-      } catch (err) {
-        console.error('Erro na leitura do frame:', err);
+      } catch {
         break;
       }
       if (!encodeFrame(frame)) break;
     }
-    clearTimeout(frameTimeout);
+    clearTimeout(stallTimer);
   }
 
   /** Demais navegadores: extrai os quadros de um <video> alimentado pela stream. */
@@ -804,7 +803,7 @@ export function createBroadcaster({
       opacity: '0',
     });
     document.body.append(video);
-    video.play()?.catch?.(() => { });
+    video.play()?.catch?.(() => {});
 
     const t0 = performance.now();
     const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
@@ -822,19 +821,9 @@ export function createBroadcaster({
       if (!frameClock) schedule();
     };
 
-    let tickTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      onAviso?.('A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.');
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
-
     const tick = () => {
       if (!running) return;
-      clearTimeout(tickTimeout);
-      tickTimeout = setTimeout(alertStuck, 5000);
-
-      if (video.paused) video.play()?.catch?.(() => { });
+      if (video.paused) video.play()?.catch?.(() => {});
       if (video.readyState < 2 || !video.videoWidth) return rescheduleFallback();
 
       const now = performance.now();
@@ -865,6 +854,7 @@ export function createBroadcaster({
           displaySurface !== 'browser' &&
           frameClock &&
           qualityCounterActive &&
+          !wantKeyframe &&
           presentedFrames === lastPresentedFrames
         ) {
           return;
@@ -895,22 +885,10 @@ export function createBroadcaster({
   }
 
   function encodeFrame(frame) {
-    if (!running) {
+    if (!running || encoder?.state !== 'configured') {
       frame.close();
       return false;
     }
-    
-    if (encoder?.state !== 'configured') {
-      try {
-        console.warn('Encoder em estado inválido, tentando recriar...');
-        createEncoder();
-      } catch (err) {
-        console.error('Falha ao recriar encoder:', err);
-        frame.close();
-        return false;
-      }
-    }
-    
     capturedFrames++;
 
     // WebSocket é TCP: continuar codificando quando a saída já acumulou dados
@@ -996,7 +974,7 @@ export function createBroadcaster({
       stream
         ?.getVideoTracks()[0]
         ?.applyConstraints(captureConstraints(fps, target.width, target.height))
-        .catch(() => { });
+        .catch(() => {});
       wantKeyframe = true;
       onStatus?.({
         codec: config.codec,
@@ -1017,10 +995,41 @@ export function createBroadcaster({
     relayCongestion = false;
     const congested =
       relayCongested || (capturedFrames >= 10 && networkDrops / capturedFrames >= 0.2);
-    networkPressureWindows = congested ? networkPressureWindows + 1 : 0;
-    if (networkPressureWindows < 2 || bitrate <= 1_200_000) return;
+    if (!congested) {
+      networkPressureWindows = 0;
+      const enoughFrames = capturedFrames >= Math.max(10, Math.round(fps / 4));
+      const maxBuffered = Math.max(MIN_WS_BUFFER, bitrate / 8 / 4);
+      const outputClear = (ws?.bufferedAmount ?? 0) < maxBuffered / 4;
+      networkHealthyWindows =
+        bitrate < requestedBitrate && enoughFrames && outputClear ? networkHealthyWindows + 1 : 0;
 
-    const nextBitrate = Math.max(1_200_000, Math.floor((bitrate * 0.75) / 100_000) * 100_000);
+      if (networkHealthyWindows < NETWORK_GOOD_WINDOWS) return;
+
+      const nextBitrate = Math.min(
+        requestedBitrate,
+        Math.ceil(Math.max(bitrate * 1.2, bitrate + 300_000) / 100_000) * 100_000,
+      );
+      networkHealthyWindows = 0;
+      if (nextBitrate <= bitrate) return;
+
+      bitrate = nextBitrate;
+      config = { ...config, bitrate };
+      encoder.configure(config);
+      wantKeyframe = true;
+      onAviso?.(
+        `A rede estabilizou; a qualidade subiu para ${(bitrate / 1_000_000).toFixed(1)} Mb/s.`,
+      );
+      return;
+    }
+
+    networkHealthyWindows = 0;
+    networkPressureWindows++;
+    if (networkPressureWindows < NETWORK_BAD_WINDOWS || bitrate <= MIN_ADAPTIVE_BITRATE) return;
+
+    const nextBitrate = Math.max(
+      MIN_ADAPTIVE_BITRATE,
+      Math.floor((bitrate * 0.75) / 100_000) * 100_000,
+    );
     if (nextBitrate >= bitrate) return;
 
     bitrate = nextBitrate;
@@ -1086,9 +1095,8 @@ export function createBroadcaster({
 
     // O decoderConfig chega no primeiro chunk e sempre que a config muda.
     if (metadata?.decoderConfig) {
-      const serialized = serializeConfig(metadata.decoderConfig);
-      lastSentConfig = serialized;
-      ws.send(JSON.stringify({ type: 'config', config: serialized }));
+      lastSentConfig = serializeConfig(metadata.decoderConfig);
+      ws.send(JSON.stringify({ type: 'config', config: lastSentConfig }));
     }
 
     const data = new Uint8Array(chunk.byteLength);
@@ -1182,15 +1190,7 @@ export function createBroadcaster({
         if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
           mySlot = msg.slot;
           pronto();
-        } else if (msg.type === 'state') {
-          const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
-          if (myStream?.watchers) {
-            watchers = myStream.watchers;
-            viewers = watchers.length;
-          } else {
-            viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
-          }
-        }
+        } else if (msg.type === 'state') lerEstado(msg);
         // Alguém entrou na sala e precisa de um ponto de partida.
         else if (msg.type === 'need-keyframe') wantKeyframe = true;
         else if (msg.type === 'relay-congestion') relayCongestion = true;
@@ -1209,123 +1209,52 @@ export function createBroadcaster({
       });
 
       ws.addEventListener('error', () => {
-        if (!resolvido) falhar('Falha ao conectar no servidor.');
+        falhar('Falha ao conectar no servidor.');
       });
 
       ws.addEventListener('close', () => {
         clearTimeout(timeout);
         stopKeepalive();
-        if (running) {
-          // Conexão caiu com a transmissão no ar: tentar reconectar em vez de
-          // desistir. O encoder e o stream continuam vivos; só o socket morreu.
-          attemptReconnect();
-        } else {
-          falhar('A conexão com o servidor fechou antes de liberar a transmissão.');
-        }
+        // No ar, a queda não encerra nada: o encoder e a captura continuam
+        // vivos, só o socket morreu. Antes de liberar, é falha mesmo.
+        falhar('A conexão com o servidor fechou antes de liberar a transmissão.');
+        if (running) agendarReconexao();
       });
     });
   }
 
-  /** Reconecta o WebSocket sem derrubar o encoder nem pedir a tela de novo. */
-  function attemptReconnect() {
-    if (!running) return;
+  /**
+   * Reconecta com espera exponencial, sem derrubar o encoder nem pedir a tela
+   * de novo. Idempotente: a queda pode ser notada por mais de um caminho.
+   */
+  function agendarReconexao() {
+    if (!running || reconnectTimer) return;
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
       stop('Conexão com o servidor perdida após várias tentativas.');
       return;
     }
 
     reconnectAttempts++;
-    const delay = Math.min(
-      RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1),
-      10_000,
+    const delay = Math.min(RECONNECT_BASE_MS * 2 ** (reconnectAttempts - 1), 10_000);
+    onAviso?.(
+      `Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
     );
-    onAviso?.(`Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
     reconnectTimer = setTimeout(async () => {
+      reconnectTimer = null;
       if (!running) return;
       try {
-        mySlot = null;
-        ws = new WebSocket(wsUrl);
-        ws.binaryType = 'arraybuffer';
-
-        await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('timeout'));
-            ws.close();
-          }, 10_000);
-
-          ws.addEventListener('open', () => {
-            clearTimeout(timeout);
-          });
-
-          ws.addEventListener('message', (e) => {
-            if (typeof e.data !== 'string') return;
-            const msg = JSON.parse(e.data);
-            if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
-              mySlot = msg.slot;
-              clearTimeout(timeout);
-              resolve();
-            } else if (msg.type === 'state') {
-              const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
-              if (myStream?.watchers) {
-                watchers = myStream.watchers;
-                viewers = watchers.length;
-              } else {
-                viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
-              }
-            }
-            else if (msg.type === 'need-keyframe') wantKeyframe = true;
-            else if (msg.type === 'relay-congestion') relayCongestion = true;
-            else if (msg.type === 'native-audio-ready') {
-              nativeAudio = true;
-              onAviso?.('Áudio isolado do Firefox ligado.');
-            } else if (msg.type === 'native-audio-error') {
-              nativeAudio = false;
-              onAviso?.(msg.message || 'Não foi possível capturar o áudio do Firefox.');
-            } else if (msg.type === 'stop-request') {
-              stop(msg.motivo ?? 'Transmissão encerrada pela atividade.');
-            } else if (msg.type === 'error') {
-              stop(msg.message);
-            }
-          });
-
-          ws.addEventListener('error', () => reject(new Error('Falha na reconexão.')));
-          ws.addEventListener('close', () => {
-            stopKeepalive();
-            if (running && !resolvido) {
-              reject(new Error('Conexão fechou durante reconexão.'));
-            }
-          });
-
-          let resolvido = false;
-          const origResolve = resolve;
-          resolve = (v) => { resolvido = true; origResolve(v); };
-        });
-
-        // Reconectou com sucesso.
-        reconnectAttempts = 0;
-        startKeepalive();
-
-        // Reestabelece a transmissão no servidor.
+        await connect();
+        // Quem entrar agora precisa do mesmo ponto de partida da primeira vez.
         ws.send(JSON.stringify({ type: 'start' }));
-        if (lastSentConfig) {
-          ws.send(JSON.stringify({ type: 'config', config: lastSentConfig }));
-        }
+        if (lastSentConfig) ws.send(JSON.stringify({ type: 'config', config: lastSentConfig }));
         if (lastSentAudioConfig) {
           ws.send(JSON.stringify({ type: 'audio-config', config: lastSentAudioConfig }));
         }
         wantKeyframe = true;
-
-        // Reconecta o handler de close para futuras quedas.
-        ws.addEventListener('close', () => {
-          stopKeepalive();
-          if (running) attemptReconnect();
-        });
-
         onAviso?.('Conexão reestabelecida.');
       } catch {
-        // Falhou: tenta de novo recursivamente (com backoff).
-        if (running) attemptReconnect();
+        agendarReconexao();
       }
     }, delay);
   }
@@ -1333,9 +1262,7 @@ export function createBroadcaster({
   function startKeepalive() {
     stopKeepalive();
     keepaliveTimer = setInterval(() => {
-      if (ws?.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'ping' }));
-      }
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
     }, KEEPALIVE_INTERVAL_MS);
   }
 
@@ -1364,14 +1291,14 @@ export function createBroadcaster({
     stream = fresh;
     const track = fresh.getVideoTracks()[0];
     displaySurface = track.getSettings?.().displaySurface ?? null;
-    await track.applyConstraints?.(captureConstraints(fps)).catch(() => { });
-    track.contentHint = 'motion';
+    await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
+    track.contentHint = screenContentHint(fps);
     track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
     // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
     // encoder e a fila estoura.
     reader = null;
-    await previousReader?.cancel().catch(() => { });
+    await previousReader?.cancel().catch(() => {});
     previous?.getTracks().forEach((t) => t.stop());
 
     // Zera o tamanho conhecido: a tela nova quase certamente tem outro, e é o
@@ -1382,13 +1309,13 @@ export function createBroadcaster({
 
     if (video) {
       video.srcObject = fresh;
-      video.play().catch(() => { });
+      video.play().catch(() => {});
     } else {
       pumpDirect(track);
     }
 
     // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
-    await audioReader?.cancel().catch(() => { });
+    await audioReader?.cancel().catch(() => {});
     audioReader = null;
     if (audioEncoder?.state === 'configured') {
       try {
@@ -1406,7 +1333,10 @@ export function createBroadcaster({
 
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */
   function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
-    if (nextBitrate) bitrate = nextBitrate;
+    if (nextBitrate) {
+      bitrate = nextBitrate;
+      requestedBitrate = nextBitrate;
+    }
     if (nextFps) fps = nextFps;
     if (encoder?.state !== 'configured') return;
 
@@ -1418,6 +1348,7 @@ export function createBroadcaster({
     };
     outputLimitIndex = 0;
     networkPressureWindows = 0;
+    networkHealthyWindows = 0;
     relayCongestion = false;
     srcW = 0;
     srcH = 0;
@@ -1427,7 +1358,7 @@ export function createBroadcaster({
 
     if (fonte === 'tela') {
       const track = stream?.getVideoTracks()[0];
-      if (track) track.contentHint = 'motion';
+      if (track) track.contentHint = screenContentHint(fps);
     }
 
     // Pedir a taxa nova à própria captura evita gastar CPU codificando quadros
@@ -1435,13 +1366,13 @@ export function createBroadcaster({
     stream
       ?.getVideoTracks()[0]
       ?.applyConstraints(captureConstraints(fps))
-      .catch(() => { });
+      .catch(() => {});
   }
 
   const getSettings = () => ({ bitrate, fps });
 
   function cleanup() {
-    stopAntiSleep();
+    stopWakeLock();
     frameClock?.postMessage({ type: 'stop' });
     frameClock?.terminate();
     frameClock = null;
@@ -1457,8 +1388,8 @@ export function createBroadcaster({
     const wasRunning = running;
     running = false;
 
-    // Cancela qualquer reconexão pendente e o keepalive antes de destruir o
-    // resto: sem isto, o timer dispara sobre um encoder já fechado.
+    // Antes de destruir o resto: sem isto o timer de reconexão dispararia
+    // sobre um encoder já fechado.
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     reconnectAttempts = 0;
@@ -1467,9 +1398,9 @@ export function createBroadcaster({
     clearInterval(statsTimer);
     statsTimer = null;
 
-    reader?.cancel().catch(() => { });
+    reader?.cancel().catch(() => {});
     reader = null;
-    audioReader?.cancel().catch(() => { });
+    audioReader?.cancel().catch(() => {});
     audioReader = null;
 
     for (const e of [encoder, audioEncoder]) {
@@ -1491,6 +1422,7 @@ export function createBroadcaster({
     }
     ws = null;
     nativeAudio = false;
+    nativeAudioRequesting = false;
     relayCongestion = false;
 
     cleanup();

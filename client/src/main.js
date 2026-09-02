@@ -5,7 +5,6 @@ import { withTimeout } from './async.js';
 import { enterImmersive, fullscreenElement, leaveImmersive } from './immersive.js';
 import { canCaptureScreen, defaultBroadcastQuality, isMobileClient } from './platform.js';
 import { recoverableSlots, shouldRecoverStream } from './recovery.js';
-import { createBroadcaster } from '../../shared/broadcaster.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,14 +26,16 @@ function reportLog(level, message, details = {}) {
   fetch(`${P}/api/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ level, message, details })
+    body: JSON.stringify({ level, message, details }),
   }).catch(() => {});
 }
 
 const originalConsoleError = console.error;
 console.error = function (...args) {
   originalConsoleError.apply(console, args);
-  const message = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  const message = args
+    .map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
   reportLog('error', message);
 };
 
