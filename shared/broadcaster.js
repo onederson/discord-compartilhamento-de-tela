@@ -765,7 +765,7 @@ export function createBroadcaster({
     let frameTimeout = null;
     const alertStuck = () => {
       if (!running) return;
-      onAviso?.('A captura travou: o Windows parou de entregar quadros do jogo. Rode o CORRIGIR_TRANSMISSAO_JOGOS.bat como administrador, REINICIE o PC e transmita pelo navegador do TRANSMITIR_SEM_TRAVAR.bat.');
+      onAviso?.('A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.');
       console.error('Captura de vídeo parou de emitir quadros.');
     };
     

@@ -60,3 +60,22 @@ Só encerre o processo se você confirmar que pertence a outra execução desta 
 Servidor e túnel aparecem na mesma janela com prefixos diferentes. O `cloudflared` tenta reconectar suas conexões internas; se o executável encerrar, o supervisor do projeto o recria com atrasos de 2, 4, 8, 16 e no máximo 30 segundos.
 
 Quick Tunnel recriado recebe outro hostname. O `.env` e o servidor são atualizados, mas o Discord Developer Portal não pode ser editado automaticamente. Named Tunnel conserva o hostname e é recomendado.
+
+## A imagem congela quando eu clico no jogo (OpenGL e Vulkan)
+
+Sintoma: a transmissão funciona enquanto você está em outra janela, mas congela para quem assiste no instante em que o jogo ganha foco. Alt+Tab para fora e a imagem volta. Acontece com jogos e emuladores OpenGL ou Vulkan (Project Zomboid, RPCS3, Minecraft Java, Dolphin, Yuzu), em tela cheia e em janela.
+
+Causa: em placas NVIDIA, o driver apresenta aplicativos OpenGL e Vulkan direto ao monitor por um caminho que a captura de tela do Windows não enxerga. Nenhuma captura de tela do navegador (nem WGC, nem DXGI) recebe quadros enquanto o jogo está em foco. Jogos DirectX não são afetados.
+
+Correção, no Painel de Controle NVIDIA:
+
+1. Botão direito na área de trabalho, **Painel de Controle NVIDIA** (ou NVIDIA App, aba Gráficos).
+2. **Gerenciar configurações 3D**, aba **Configurações globais**.
+3. **Método de apresentação Vulkan/OpenGL** (*Vulkan/OpenGL present method*): mude de *Automático* para **Preferir em camadas no DXGI Swapchain** (*Prefer layered on DXGI Swapchain*).
+4. **Aplicar** e reabra o jogo.
+
+Para não mudar globalmente, faça o mesmo na aba *Configurações de programa* só para o jogo.
+
+`CORRIGIR_TRANSMISSAO_JOGOS.bat` (como administrador) detecta a placa, mostra esse passo a passo e aplica ajustes complementares no registro: desliga o GameDVR e o MPO do DWM (`OverlayTestMode=5`, vale após reiniciar). Esses ajustes sozinhos **não** resolvem o congelamento em NVIDIA; a configuração do driver acima é o que resolve.
+
+`TRANSMITIR_SEM_TRAVAR.bat` abre um navegador com perfil separado e flags que impedem o Chromium de suspender a aba quando outra janela a cobre. Não é necessário depois da correção NVIDIA, mas serve de fallback e permite alternar o motor de captura (WGC ou DXGI/GDI) para diagnóstico.
