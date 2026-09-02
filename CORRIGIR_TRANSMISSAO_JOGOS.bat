@@ -46,11 +46,42 @@ reg add "HKCU\Software\SalaDeTela" /v "MpoAplicadoEm" /t REG_SZ /d "%date% %time
 echo.
 echo  [3/3] Detectando placa de video...
 set "GPU_NVIDIA="
+set "GPU_AMD="
 powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -match NVIDIA | Select-Object -ExpandProperty Name -First 1" > "%TEMP%\saladetela_gpu.txt" 2>nul
 set /p GPU_NVIDIA=<"%TEMP%\saladetela_gpu.txt"
+powershell -NoProfile -Command "Get-CimInstance Win32_VideoController | Where-Object Name -match 'AMD|Radeon' | Select-Object -ExpandProperty Name -First 1" > "%TEMP%\saladetela_gpu.txt" 2>nul
+set /p GPU_AMD=<"%TEMP%\saladetela_gpu.txt"
 del "%TEMP%\saladetela_gpu.txt" >nul 2>&1
 
-if not defined GPU_NVIDIA goto :outras_placas
+if defined GPU_NVIDIA goto :placa_nvidia
+if defined GPU_AMD goto :placa_amd
+goto :outras_placas
+
+:placa_amd
+echo      [+] Encontrada: %GPU_AMD%
+echo.
+echo =========================================================================================
+echo   CORRECAO PARA AMD:
+echo =========================================================================================
+echo.
+echo   O driver AMD nao tem a opcao "metodo de apresentacao" da NVIDIA porque ja apresenta
+echo   OpenGL e Vulkan por um caminho que a captura enxerga. Em AMD, o congelamento vem do
+echo   MPO - Multi-Plane Overlay - e a propria AMD recomenda desativa-lo pelo registro.
+echo.
+echo   1. Este script JA desativou o MPO acima. REINICIE o computador para valer.
+echo.
+echo   2. Windows 11: Configuracoes -^> Sistema -^> Tela -^> Elementos graficos -^>
+echo      "Alterar configuracoes graficas padrao" -^> desligue
+echo      "Otimizacoes para jogos em janela".
+echo.
+echo   3. No AMD Software Adrenalin -^> Jogos -^> perfil do jogo, desligue
+echo      "Enhanced Sync" se ainda travar: ele troca o modo de apresentacao em janela.
+echo.
+echo   4. Use o jogo em Janela sem Bordas e reabra-o depois de reiniciar.
+echo.
+goto :reinicio
+
+:placa_nvidia
 
 echo      [+] Encontrada: %GPU_NVIDIA%
 echo.
