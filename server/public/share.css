@@ -38,37 +38,40 @@ body {
 }
 
 h1 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 22px;
+  line-height: 1.2;
 }
 
-header {
-  text-align: center;
-  margin-bottom: 20px;
-}
-
-.brand-header {
+/* Marca discreta: logo pequeno ao lado do título, sem brilho nem animação.
+   A página é uma ferramenta; a identidade aparece, mas não compete com ela. */
+.brand {
   display: flex;
-  justify-content: center;
   align-items: center;
-  margin-bottom: 12px;
+  gap: 14px;
 }
 
 .brand-logo {
-  width: 110px;
-  height: 110px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   object-fit: cover;
-  border: 3px solid #7289da;
-  box-shadow: 0 0 24px rgba(114, 137, 218, 0.45), 0 6px 16px rgba(0, 0, 0, 0.6);
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  border: 1px solid var(--line);
+  flex-shrink: 0;
 }
 
-.brand-logo:hover {
-  transform: scale(1.06);
-  box-shadow: 0 0 32px rgba(114, 137, 218, 0.7), 0 8px 20px rgba(0, 0, 0, 0.7);
+.brand-sub {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 13px;
 }
 
+/* Teclado: o anel só aparece para quem navega por Tab, não no clique. */
+button:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .row {
   display: flex;
@@ -138,15 +141,6 @@ button:disabled {
 
 .primary {
   background: var(--accent);
-}
-
-.secondary {
-  background: #35373c;
-  margin-bottom: 8px;
-}
-
-.secondary:hover:not(:disabled) {
-  background: #43454b;
 }
 
 .danger {
@@ -247,6 +241,17 @@ video {
   background: #1e1f22;
   color: var(--muted);
   font-size: 13px;
+}
+
+.note-link {
+  display: block;
+  margin-top: 6px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.note-link:hover {
+  text-decoration: underline;
 }
 
 .stats {
@@ -479,17 +484,27 @@ video {
   color: var(--muted);
 }
 
-/* Aviso nao e erro: o som foi descartado, mas a tela continua no ar. */
+/* Ações que não mudam o estado da transmissão: trocar a tela, escolher o som.
+   Neutras para o vermelho de parar continuar sendo o único botão de alerta. */
 .secondary {
   margin-bottom: 10px;
   background: #3a3d44;
   color: #f2f3f5;
 }
 
-.secondary:hover {
+.secondary:hover:not(:disabled) {
   background: #474b53;
 }
 
+.recovery {
+  margin-top: 10px;
+}
+
+.recovery .status {
+  margin: 0 0 10px;
+}
+
+/* Aviso nao e erro: o som foi descartado, mas a tela continua no ar. */
 .status.aviso {
   color: #f0b232;
 }
@@ -510,14 +525,13 @@ footer p {
   font-size: 13px;
 }
 
-.credits {
+footer .credits {
+  margin: 0;
+  padding: 0;
+  border: 0;
   text-align: right;
-  font-size: 11.5px;
-  font-weight: 600;
-  color: var(--muted);
-  letter-spacing: 0.02em;
-  opacity: 0.85;
-  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.7;
 }
 
 /* O cartão só alarga quando há duas colunas para preencher. Mantido estreito

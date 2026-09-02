@@ -8,15 +8,16 @@
          dos cabeçalhos no-store guardou a versão antiga por heurística do
          navegador, e continuaria usando ela para sempre. Trocar a query força
          uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=45" />
+    <link rel="stylesheet" href="/share.css?v=46" />
   </head>
   <body>
     <main class="card">
-      <header>
-        <div class="brand-header">
-          <img src="/logo.jpg" alt="L.D.Z" class="brand-logo" />
+      <header class="brand">
+        <img src="/logo.jpg" alt="" width="44" height="44" class="brand-logo" />
+        <div>
+          <h1>Transmitir</h1>
+          <p class="brand-sub">Sala de Tela</p>
         </div>
-        <h1>Transmitir</h1>
       </header>
 
       <!-- Erro que impede a página inteira: token inválido, navegador sem
@@ -32,10 +33,16 @@
             <video id="tela-previa" muted playsinline hidden></video>
 
             <p class="note" id="tela-nota">
-              Para trocar de abas sem congelar, escolha <strong>Janela</strong> e selecione a janela
-              do Firefox. Escolha <strong>Tela inteira</strong> para transmitir o monitor. No
-              Firefox para Windows, o áudio isolado do aplicativo liga automaticamente; nos
-              outros navegadores, marque "Compartilhar o áudio" quando a opção aparecer.
+              Escolha <strong>Janela</strong> para transmitir um aplicativo ou
+              <strong>Tela inteira</strong> para o monitor todo. Marque "Compartilhar o áudio"
+              quando o navegador oferecer.
+              <a
+                class="note-link"
+                href="https://github.com/onederson/discord-compartilhamento-de-tela/blob/main/docs/windows.md#a-imagem-congela-quando-eu-clico-no-jogo-opengl-e-vulkan"
+                target="_blank"
+                rel="noopener"
+                >O jogo congela quando você clica nele?</a
+              >
             </p>
 
             <!-- A seta escolhe sem transmitir; o botão transmite o que estiver
@@ -75,8 +82,10 @@
             <button id="tela-stop" class="danger">Parar de transmitir a tela</button>
           </div>
 
-          <div id="tela-recovery" hidden style="margin-top: 10px;">
-            <p class="status error" style="margin-bottom: 10px;">O vídeo parou (o jogo pode ter minimizado ou mudado de resolução).</p>
+          <div id="tela-recovery" class="recovery" hidden>
+            <p class="status error">
+              O vídeo parou: a janela compartilhada fechou ou mudou de resolução.
+            </p>
             <button id="tela-recover-btn" class="primary">Selecionar tela novamente</button>
           </div>
 
@@ -137,10 +146,10 @@
           Mantenha esta aba aberta enquanto transmite. Você pode voltar para o Discord — a
           transmissão continua.
         </p>
-        <div class="credits">Todas as modificações feitas por Onederson</div>
+        <p class="credits">Modificações por Onederson</p>
       </footer>
     </main>
 
-    <script type="module" src="/share.js?v=45"></script>
+    <script type="module" src="/share.js?v=46"></script>
   </body>
 </html>
