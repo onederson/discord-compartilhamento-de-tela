@@ -18,7 +18,8 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=12';
+  pedirDisplayMedia,
+} from '/shared/broadcaster.js?v=13';
 
 const $ = (id) => document.getElementById(id);
 
@@ -316,9 +317,9 @@ function criarPainel(fonte) {
   /** Abre a prévia da tela. O seletor exige o clique, que é quem chama isto. */
   async function verTela() {
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia(
-        opcoesTela({ fps: opcoes.fps, comSom: true }),
-      );
+      const s = await pedirDisplayMedia(opcoesTela({ fps: opcoes.fps, comSom: true }), {
+        comSom: true,
+      });
       pararPrevia();
       mostrarPrevia(s);
       setStatus('Prévia — ainda não está no ar.');

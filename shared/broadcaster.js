@@ -145,12 +145,37 @@ export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
   };
   if (comSom) {
     opts.windowAudio = 'window';
-    // Deixa a opção de áudio aparecer também para tela inteira. A escolha
-    // continua explícita no seletor do navegador; quem não marcar a caixa
-    // recebe somente vídeo.
+    // Padrão Chromium histórico e atual (Chrome 105+):
     opts.systemAudio = 'include';
+    // Padrão moderno da especificação W3C (AudioSelectionPreferenceEnum: 'preferred' | 'not-preferred'):
+    opts.audioSelection = 'preferred';
   }
   return opts;
+}
+
+/**
+ * Pede a captura de tela garantindo compatibilidade total entre navegadores novos e antigos:
+ * 1. Tenta primeiro com as opções avançadas (Chromium + especificação W3C moderna).
+ * 2. Se o navegador for antigo ou restrito e lançar erro por opções desconhecidas
+ *    (TypeError ou OverconstrainedError), repete automaticamente com as opções básicas ({ video: true, audio: Boolean(comSom) }).
+ */
+export async function pedirDisplayMedia(opcoes, { comSom = false } = {}) {
+  try {
+    return await navigator.mediaDevices.getDisplayMedia(opcoes);
+  } catch (err) {
+    if (
+      (err instanceof TypeError ||
+        err?.name === 'TypeError' ||
+        err?.name === 'OverconstrainedError') &&
+      navigator.mediaDevices?.getDisplayMedia
+    ) {
+      return await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: Boolean(comSom),
+      });
+    }
+    throw err;
+  }
 }
 
 /**
@@ -397,7 +422,7 @@ export function createBroadcaster({
   }
 
   function capturarTela() {
-    return navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+    return pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
   }
 
   /**
@@ -585,9 +610,9 @@ export function createBroadcaster({
     }
 
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const escolha = await navigator.mediaDevices.getDisplayMedia(
-      opcoesCaptura({ video: true, comSom: true }),
-    );
+    const escolha = await pedirDisplayMedia(opcoesCaptura({ video: true, comSom: true }), {
+      comSom: true,
+    });
 
     const faixa = escolha.getAudioTracks()[0];
     const superficie = escolha.getVideoTracks()[0]?.getSettings?.().displaySurface;
@@ -1282,7 +1307,7 @@ export function createBroadcaster({
    */
   async function changeScreen() {
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const fresh = await navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+    const fresh = await pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
 
     const previous = stream;
     const previousReader = reader;

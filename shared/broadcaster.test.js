@@ -10,7 +10,13 @@
  * uma faixa de som que traria o Discord de volta em eco, e o que sai no fio.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createBroadcaster, fonteIndisponivel, opcoesTela, supportError } from './broadcaster.js';
+import {
+  createBroadcaster,
+  fonteIndisponivel,
+  opcoesTela,
+  pedirDisplayMedia,
+  supportError,
+} from './broadcaster.js';
 
 // ------------------------------------------------------------------- dublês
 
@@ -416,7 +422,38 @@ describe('opcoesTela', () => {
       surfaceSwitching: 'exclude',
       windowAudio: 'window',
       systemAudio: 'include',
+      audioSelection: 'preferred',
     });
+  });
+
+  it('faz fallback para opções mínimas se o navegador rejeitar opções avançadas com TypeError', async () => {
+    const stream = new StreamFalsa(new FaixaFalsa('video', { width: 1280, height: 720 }));
+    let tentativas = 0;
+    navigator.mediaDevices.getDisplayMedia = vi.fn(async (_opcoes) => {
+      tentativas++;
+      if (tentativas === 1) {
+        throw new TypeError("Failed to read the 'audioSelection' property");
+      }
+      return stream;
+    });
+
+    const res = await pedirDisplayMedia(opcoesTela({ comSom: true }), { comSom: true });
+    expect(res).toBe(stream);
+    expect(tentativas).toBe(2);
+    expect(navigator.mediaDevices.getDisplayMedia).toHaveBeenNthCalledWith(2, {
+      video: true,
+      audio: true,
+    });
+  });
+
+  it('repassa erro de cancelamento do usuário sem mascarar', async () => {
+    const erroCancelamento = new Error('Permission denied');
+    erroCancelamento.name = 'NotAllowedError';
+    navigator.mediaDevices.getDisplayMedia = vi.fn(async () => {
+      throw erroCancelamento;
+    });
+
+    await expect(pedirDisplayMedia(opcoesTela())).rejects.toThrow('Permission denied');
   });
 });
 
