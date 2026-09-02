@@ -251,6 +251,7 @@ function entradasDoGrid() {
 function watchSlot(slot) {
   const info = available.get(slot);
   if (!info) return;
+  activeSlot = slot;
   watching.add(slot);
   ws?.send(JSON.stringify({ type: 'watch', slot }));
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
@@ -295,6 +296,10 @@ function unwatchSlot(slot) {
   watching.delete(slot);
   ws?.send(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
+  if (activeSlot === slot) {
+    const proxima = [...watching].find((s) => available.has(s));
+    activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
+  }
   renderGrid();
   renderBar();
 }
@@ -392,9 +397,10 @@ function renderGrid() {
     if (telaCheia) liberarImersao();
     telaCheia = false;
   } else if (activeSlot === null || !available.has(activeSlot)) {
-    // Sempre há uma tela em destaque quando existe transmissão: chegar numa
-    // sala com tela no ar e ver só avatares esconderia o que importa.
-    activeSlot = entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
+    // Sempre há uma tela em destaque quando existe transmissão.
+    // Prioriza uma tela que o usuário já está assistindo; se não houver, pega a primeira disponível.
+    const assistindo = [...watching].find((s) => available.has(s));
+    activeSlot = assistindo ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
   // Quem chegou pelo link da atividade já pediu para assistir lá atrás: parar
@@ -1026,7 +1032,9 @@ function renderBar() {
 
 /** Prepara o lugar do transmissor; o decoder só nasce quando o config chega. */
 function openStream(slot, userId) {
+  const wasActive = activeSlot === slot;
   closeStream(slot);
+  if (wasActive) activeSlot = slot;
 
   const canvas = document.createElement('canvas');
   const s = {
@@ -1125,6 +1133,11 @@ function endStream(slot) {
     clearInterval(lagTimer);
     lagTimer = null;
     for (const id of ['pLag', 'pFps', 'pRes']) $(id).textContent = '—';
+  }
+
+  if (activeSlot === slot) {
+    const proxima = [...watching].find((s) => available.has(s));
+    activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
   renderGrid();
