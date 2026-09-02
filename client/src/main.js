@@ -2321,9 +2321,13 @@ $('changeScreen')?.addEventListener('click', async () => {
     return;
   }
 
-  if (minhasFontes().has('tela')) {
-    trazerAba('tela');
+  if (minhasFontes().has('tela') || abaAberta()) {
+    ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
+    toast('Alterne para a janela do navegador já aberta para escolher a nova tela.');
+    return;
   }
+
+  ligarFonte('tela');
 });
 
 $('camera').addEventListener('click', () => {

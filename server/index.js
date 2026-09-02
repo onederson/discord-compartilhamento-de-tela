@@ -1194,6 +1194,13 @@ function handleViewer(ws, room, auth) {
       return;
     }
 
+    // Pedido vindo da Activity para trocar a tela na aba de captura já aberta.
+    if (msg.type === 'change-screen-broadcast') {
+      const n = R.toControls(room, auth.uid, { type: 'change-screen-request' });
+      if (n) logDev(`[room ${room.id}] ${auth.name} pediu para trocar a tela na aba de captura`);
+      return;
+    }
+
     if (msg.type === 'stop-broadcast') {
       // Sem fonte, para tudo o que a pessoa estiver transmitindo. É o que o
       // botão da barra sempre fez, e continua valendo para quem só tem uma.

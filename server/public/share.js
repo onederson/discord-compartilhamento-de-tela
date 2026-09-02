@@ -204,7 +204,25 @@ function ligarControle() {
 
     if (msg.type === 'start-request') atenderPedido(msg.fonte, msg.opcoes);
     else if (msg.type === 'config-request') aplicarConfig(msg.opcoes);
-    else if (msg.type === 'room-gone') {
+    else if (msg.type === 'change-screen-request') {
+      chamar('tela');
+      const painel = paineis.tela;
+      if (painel?.ativo()) {
+        try {
+          painel.trocarTela()?.catch(() => {
+            painel.setStatus(
+              'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+              'aviso',
+            );
+          });
+        } catch {
+          painel.setStatus(
+            'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+            'aviso',
+          );
+        }
+      }
+    } else if (msg.type === 'room-gone') {
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.
       clearTimeout(religar);
@@ -590,6 +608,7 @@ function criarPainel(fonte) {
       pararPrevia();
     },
     trocarSom: () => broadcaster?.trocarSom(),
+    trocarTela: () => broadcaster?.changeScreen(),
   };
 }
 
