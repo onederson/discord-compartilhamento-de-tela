@@ -14,6 +14,7 @@ import { buildAdminDashboard } from './admin.js';
 import { createNativeAudioBridge, packNativeAudio } from './native-audio.js';
 import { createNativeAudioAuthorizer, startNativeAudioLocalServer } from './native-audio-auth.js';
 import { createDiagnosticLogger, diagnosticoLigado } from '../scripts/diagnostics.mjs';
+import { servidoresPermitidos, permitirWeb } from '../scripts/env.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -182,7 +183,7 @@ app.use(
 // atende poucas dezenas de pessoas, não precisa de Redis.
 const authAttempts = new Map();
 const AUTH_RATE_WINDOW_MS = 60 * 1000;
-const AUTH_RATE_MAX = 20;
+const AUTH_RATE_MAX = process.env.NODE_ENV === 'test' ? 500 : 20;
 
 function rateLimit(req, res, next) {
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -283,6 +284,16 @@ app.post('/api/session', rateLimit, async (req, res) => {
 
     const guildId = /^[0-9]{15,21}$/.test(String(guild_id ?? '')) ? String(guild_id) : null;
     const channelId = /^[0-9]{15,21}$/.test(String(channel_id ?? '')) ? String(channel_id) : null;
+
+    const permitidos = servidoresPermitidos();
+    if (permitidos.length > 0) {
+      if (!guildId || !permitidos.includes(guildId)) {
+        return res.status(403).json({
+          error: 'Esta atividade é de uso exclusivo do servidor Discord autorizado.',
+        });
+      }
+    }
+
     const [presenca, guildName] = await Promise.all([
       inVoiceChannel(guildId, channelId, me.id),
       resolveGuildName(guildId),
@@ -345,6 +356,12 @@ app.post('/api/session-dev', (req, res) => {
 });
 
 app.post('/api/session-guest', rateLimit, (req, res) => {
+  if (!permitirWeb()) {
+    return res.status(403).json({
+      error: 'Acesso web desativado. Abra a aplicação diretamente pelo servidor do Discord.',
+    });
+  }
+
   const raw = String(req.body?.name ?? '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -552,12 +569,21 @@ function issueRoomTokens(roomId, me) {
 app.post('/api/rooms/list', (req, res) => {
   const me = verifyToken(req.body?.identity);
   const instance = me?.scope === 'identity' ? me.instance : WEB_INSTANCE;
+  if (!permitirWeb() && instance === WEB_INSTANCE) {
+    return res.json({ rooms: [] });
+  }
   res.json({ rooms: R.listRooms(instance) });
 });
 
 app.post('/api/rooms/create', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;
+
+  if (!permitirWeb() && me.instance === WEB_INSTANCE) {
+    return res.status(403).json({
+      error: 'Criação de salas pelo navegador desativada. Use a atividade no Discord.',
+    });
+  }
 
   const { room, error } = R.createRoom({
     instance: me.instance,
@@ -900,7 +926,13 @@ app.get('/api/config', (_req, res) => {
 
   // || e nao ??: uma variavel vazia no .env chega como string vazia, e o
   // contrato aqui e "null significa nao configurado".
-  res.json({ clientId: DISCORD_CLIENT_ID || null, asset, nativeAudioLocalUrl });
+  res.json({
+    clientId: DISCORD_CLIENT_ID || null,
+    asset,
+    nativeAudioLocalUrl,
+    permitirWeb: permitirWeb(),
+    temServidorRestrito: servidoresPermitidos().length > 0,
+  });
 });
 
 // Activity buildada (produção). Em dev o Vite serve o client na 5173.

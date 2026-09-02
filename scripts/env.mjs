@@ -39,6 +39,8 @@ const CONHECIDAS = [
   'DISCORD_CLIENT_SECRET',
   'DISCORD_BOT_TOKEN',
   'DISCORD_ADMIN_ID',
+  'DISCORD_GUILD_ID',
+  'PERMITIR_WEB',
   'NODE_ENV',
   'TUNEL_CONFIG',
   'TERMINAL_LIMPO',
@@ -54,6 +56,37 @@ export function terminalLimpo(env = lerEnv()) {
     .trim()
     .toLocaleLowerCase('pt-BR');
   return !['0', 'false', 'off', 'desligado', 'nao', 'não'].includes(valor);
+}
+
+function ambienteAtual(env) {
+  if (env) return env;
+  if (typeof process !== 'undefined' && process.env) {
+    return { ...lerEnv(), ...process.env };
+  }
+  return lerEnv();
+}
+
+/** Servidores Discord autorizados a usar a aplicação (vazio = qualquer servidor). */
+export function servidoresPermitidos(env) {
+  const e = ambienteAtual(env);
+  return String(e.DISCORD_GUILD_ID ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+/** Se o acesso web anônimo/criação de salas fora do Discord é permitido. */
+export function permitirWeb(env) {
+  const e = ambienteAtual(env);
+  const explicit = e.PERMITIR_WEB;
+  if (explicit !== undefined && String(explicit).trim() !== '') {
+    return !['0', 'false', 'off', 'desligado', 'nao', 'não'].includes(
+      String(explicit).trim().toLowerCase(),
+    );
+  }
+  // Se configurou servidores exclusivos do Discord, desativa o acesso web anônimo por padrão
+  if (servidoresPermitidos(e).length > 0) return false;
+  return true;
 }
 
 /**
@@ -101,6 +134,14 @@ export function gravarEnv(novos) {
     '# Ligue o Modo desenvolvedor (Configurações, Avançado), botão direito no',
     '# seu nome, Copiar ID. Só esta conta abre /admin. Vazio = painel desligado.',
     `DISCORD_ADMIN_ID=${v.DISCORD_ADMIN_ID ?? ''}`,
+    '',
+    '# ID do(s) servidor(es) do Discord autorizados. Vários separados por vírgula.',
+    '# Vazio = liberado para qualquer servidor onde a atividade for iniciada.',
+    `DISCORD_GUILD_ID=${v.DISCORD_GUILD_ID ?? ''}`,
+    '',
+    '# Permite que visitantes no navegador criem salas fora do Discord.',
+    '# 0 = desativado (seguro, exclusivo para Discord). 1 = ativado (público).',
+    `PERMITIR_WEB=${v.PERMITIR_WEB ?? ''}`,
     '',
     '# Deixe "production" quando publicar de verdade.',
     `NODE_ENV=${v.NODE_ENV ?? 'development'}`,

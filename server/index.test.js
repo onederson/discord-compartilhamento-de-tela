@@ -197,6 +197,17 @@ describe('/api/session-guest', () => {
 
     expect(um.user.id).not.toBe(outro.user.id);
   });
+
+  it('bloqueia convidados quando PERMITIR_WEB está desligado', async () => {
+    process.env.PERMITIR_WEB = '0';
+    try {
+      const resp = await post('/api/session-guest', { name: 'Visitante' });
+      expect(resp.status).toBe(403);
+      expect((await resp.json()).error).toMatch(/desativado/);
+    } finally {
+      delete process.env.PERMITIR_WEB;
+    }
+  });
 });
 
 describe('/api/token', () => {
@@ -273,6 +284,38 @@ describe('/api/session', () => {
     });
 
     expect((await post('/api/session', { access_token: 'x', instance_id: 'i' })).status).toBe(500);
+  });
+
+  it('bloqueia chamada de servidor não autorizado quando DISCORD_GUILD_ID está configurado', async () => {
+    externas.set('https://discord.com/api/users/@me', () =>
+      json({ id: '123456789012345678', global_name: 'Alice' }),
+    );
+    process.env.DISCORD_GUILD_ID = '999888777666555444';
+    try {
+      // Tentativa sem guild_id (DM)
+      const semGuild = await post('/api/session', { access_token: 'x', instance_id: 'i' });
+      expect(semGuild.status).toBe(403);
+      expect((await semGuild.json()).error).toMatch(/exclusivo do servidor/);
+
+      // Tentativa em outro servidor
+      const outroGuild = await post('/api/session', {
+        access_token: 'x',
+        instance_id: 'i',
+        guild_id: '111222333444555666',
+      });
+      expect(outroGuild.status).toBe(403);
+      expect((await outroGuild.json()).error).toMatch(/exclusivo do servidor/);
+
+      // Servidor autorizado
+      const autorizado = await post('/api/session', {
+        access_token: 'x',
+        instance_id: 'i',
+        guild_id: '999888777666555444',
+      });
+      expect(autorizado.status).toBe(200);
+    } finally {
+      delete process.env.DISCORD_GUILD_ID;
+    }
   });
 });
 

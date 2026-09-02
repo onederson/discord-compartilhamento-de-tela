@@ -1210,13 +1210,42 @@ async function boot() {
   // Buscada em paralelo, nunca antes: ela traz o diagnóstico de versão e o
   // client id de reserva, e nenhum dos dois vale segurar o login.
   const config = loadConfig();
+  const cfg = await config;
 
-  // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
-  // criar e entrar é que pedem identidade.
-  session = inDiscord ? await authDiscord(config) : await authWeb();
+  const ingresso = params.get('t');
+  if (!inDiscord && !cfg.permitirWeb && !ingresso) {
+    clearTimeout(vigia);
+    $('lobby')?.setAttribute('hidden', '');
+    document.querySelector('.bottombar')?.classList.add('hidden');
+    setEmpty(
+      'Aplicação Exclusiva do Discord',
+      'Esta aplicação é privada e de uso exclusivo dos membros dentro do canal de voz do Discord. Para utilizá-la, entre na call do servidor e inicie a Atividade.',
+      false,
+    );
+    return;
+  }
 
-  clientId = params.get('client_id') || (await config).clientId || null;
-  checkVersion((await config).asset);
+  try {
+    session = inDiscord ? await authDiscord(config) : await authWeb();
+  } catch (err) {
+    clearTimeout(vigia);
+    $('lobby')?.setAttribute('hidden', '');
+    document.querySelector('.bottombar')?.classList.add('hidden');
+    setEmpty(
+      err.status === 403 ? 'Acesso Restrito' : 'Não foi possível conectar',
+      err.message,
+      err.status !== 403,
+    );
+    return;
+  }
+
+  if (!session && !inDiscord && !ingresso) {
+    clearTimeout(vigia);
+    return;
+  }
+
+  clientId = params.get('client_id') || cfg.clientId || null;
+  checkVersion(cfg.asset);
   clearTimeout(vigia);
 
   renderProfileButton();
@@ -1229,8 +1258,6 @@ async function boot() {
 
   // Lido antes de showLobby, que limpa o parâmetro da URL ao voltar ao lobby.
   const alvo = new URLSearchParams(location.search).get('sala');
-  // Do ?t= não: ele é lido do params do arranque, capturado antes de tudo.
-  const ingresso = params.get('t');
 
   await showLobby();
   if (ingresso) return abrirPeloIngresso(ingresso);
