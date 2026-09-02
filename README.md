@@ -170,10 +170,12 @@ A resolução vai até 1080p em todos os perfis; o encoder reduz sozinho se o co
 3. **Método de apresentação Vulkan/OpenGL** (*Vulkan/OpenGL present method*): troque *Automático* por **Preferir em camadas no DXGI Swapchain**.
 4. **Aplicar** e reabra o jogo. Para não mudar globalmente, faça o mesmo em *Configurações de programa* só para o jogo.
 
+Em placas **AMD Radeon**: no AMD Software (Adrenalin Edition) → Jogos → Gráficos, desative o **Radeon Enhanced Sync** para o jogo em questão e execute o `CORRIGIR_TRANSMISSAO_JOGOS.bat` como administrador para desativar o MPO e as otimizações de jogos em janela do Windows 11.
+
 Ferramentas incluídas para Windows:
 
-- `CORRIGIR_TRANSMISSAO_JOGOS.bat` (como administrador) — detecta a placa, mostra o passo a passo acima e aplica ajustes complementares no registro (GameDVR e MPO; estes valem após reiniciar).
-- `TRANSMITIR_SEM_TRAVAR.bat` — abre um navegador com perfil separado e flags que impedem o Chromium de suspender a aba coberta pelo jogo; permite alternar o motor de captura (WGC ou DXGI/GDI) para diagnóstico. Fallback, não é necessário após a correção NVIDIA.
+- `CORRIGIR_TRANSMISSAO_JOGOS.bat` (como administrador) — detecta automaticamente se sua GPU é NVIDIA ou AMD, mostra as instruções de configuração e aplica ajustes de mitigação no registro do Windows (GameDVR, MPO e Windowed Optimizations; válidos após reiniciar o PC).
+- `TRANSMITIR_SEM_TRAVAR.bat` — abre um navegador com perfil separado e flags que impedem o Chromium de suspender a aba coberta pelo jogo; permite alternar o motor de captura (WGC ou DXGI/GDI) para diagnóstico. Fallback, não é necessário após a correção NVIDIA/AMD.
 
 No jogo, prefira **Janela sem bordas** (Zomboid: Opções → Exibição; RPCS3: Configuration → GPU → *Exclusive Fullscreen Mode: Disabled*).
 
