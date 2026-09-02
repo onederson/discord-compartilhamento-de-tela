@@ -2350,7 +2350,12 @@ $('changeScreen')?.addEventListener('click', async () => {
 
   if (minhasFontes().has('tela') || abaAberta()) {
     ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
-    toast('Alterne para a janela do navegador já aberta para escolher a nova tela.');
+
+    const origem = origemDoSite();
+    if (inDiscord && origem) {
+      sdk?.commands?.openExternalLink({ url: `${origem}/focar` })?.catch(() => {});
+    }
+    toast('Trazendo o navegador para a frente para trocar a tela…');
     return;
   }
 

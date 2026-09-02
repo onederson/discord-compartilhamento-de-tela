@@ -121,6 +121,16 @@ describe('cabeçalhos', () => {
     expect(resposta.headers.get('cache-control')).toBe('no-store');
   });
 
+  it('serve a página auxiliar /focar sem cache e com script de foco', async () => {
+    const resposta = await get('/focar');
+
+    expect(resposta.status).toBe(200);
+    expect(resposta.headers.get('cache-control')).toBe('no-store');
+    const html = await resposta.text();
+    expect(html).toContain('discord-screen-captura');
+    expect(html).toContain('discord-screenshare-focus');
+  });
+
   it('serve os termos sem a extensão no endereço', async () => {
     expect((await get('/termos')).status).toBe(200);
   });
