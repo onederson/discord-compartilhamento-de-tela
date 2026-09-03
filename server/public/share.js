@@ -18,7 +18,8 @@ import {
   supportError,
   fonteIndisponivel,
   opcoesTela,
-} from '/shared/broadcaster.js?v=11';
+  pedirDisplayMedia,
+} from '/shared/broadcaster.js?v=13';
 
 const $ = (id) => document.getElementById(id);
 
@@ -82,6 +83,35 @@ function aplicarOpcoes(novas) {
 }
 
 const paineis = {};
+window.name = 'discord-screen-captura';
+
+try {
+  const focusBc = new BroadcastChannel('discord-screenshare-focus');
+  focusBc.addEventListener('message', (e) => {
+    if (e.data?.type === 'trocar-tela') {
+      window.focus();
+      chamar('tela');
+      const painel = paineis.tela;
+      if (painel?.ativo()) {
+        try {
+          painel.trocarTela()?.catch(() => {
+            painel.setStatus(
+              'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+              'aviso',
+            );
+          });
+        } catch {
+          painel.setStatus(
+            'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+            'aviso',
+          );
+        }
+      }
+    }
+  });
+} catch {
+  // BroadcastChannel pode não estar disponível em ambientes restritos.
+}
 
 function readTokenPayload() {
   try {
@@ -203,7 +233,43 @@ function ligarControle() {
 
     if (msg.type === 'start-request') atenderPedido(msg.fonte, msg.opcoes);
     else if (msg.type === 'config-request') aplicarConfig(msg.opcoes);
-    else if (msg.type === 'room-gone') {
+    else if (msg.type === 'change-screen-request') {
+      window.name = 'discord-screen-captura';
+      window.focus();
+      chamar('tela');
+      const painel = paineis.tela;
+      if (painel?.ativo()) {
+        try {
+          painel.trocarTela()?.catch(() => {
+            painel.setStatus(
+              'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+              'aviso',
+            );
+          });
+        } catch {
+          painel.setStatus(
+            'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+            'aviso',
+          );
+        }
+      }
+
+      if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
+        try {
+          const notif = new Notification('Trocar de tela no Discord', {
+            body: 'Clique aqui para escolher a nova janela ou tela.',
+            tag: 'discord-trocar-tela',
+          });
+          notif.onclick = () => {
+            window.focus();
+            notif.close();
+            painel?.trocarTela();
+          };
+        } catch {
+          // Notificação do sistema indisponível ou bloqueada pelo SO.
+        }
+      }
+    } else if (msg.type === 'room-gone') {
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.
       clearTimeout(religar);
@@ -316,9 +382,9 @@ function criarPainel(fonte) {
   /** Abre a prévia da tela. O seletor exige o clique, que é quem chama isto. */
   async function verTela() {
     try {
-      const s = await navigator.mediaDevices.getDisplayMedia(
-        opcoesTela({ fps: opcoes.fps, comSom: true }),
-      );
+      const s = await pedirDisplayMedia(opcoesTela({ fps: opcoes.fps, comSom: true }), {
+        comSom: true,
+      });
       pararPrevia();
       mostrarPrevia(s);
       setStatus('Prévia — ainda não está no ar.');
@@ -397,6 +463,10 @@ function criarPainel(fonte) {
     // Pedido repetido não reabre nada: a segunda conexão seria recusada pelo
     // servidor, e o seletor de tela abriria por cima do que já está no ar.
     if (broadcaster) return;
+
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {});
+    }
 
     el('start').disabled = true;
     setStatus(camera ? 'Aguardando a permissão da câmera…' : 'Aguardando você escolher a tela…');
@@ -589,6 +659,7 @@ function criarPainel(fonte) {
       pararPrevia();
     },
     trocarSom: () => broadcaster?.trocarSom(),
+    trocarTela: () => broadcaster?.changeScreen(),
   };
 }
 

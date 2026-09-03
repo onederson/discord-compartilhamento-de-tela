@@ -14,6 +14,7 @@ import { buildAdminDashboard } from './admin.js';
 import { createNativeAudioBridge, packNativeAudio } from './native-audio.js';
 import { createNativeAudioAuthorizer, startNativeAudioLocalServer } from './native-audio-auth.js';
 import { createDiagnosticLogger, diagnosticoLigado } from '../scripts/diagnostics.mjs';
+import { servidoresPermitidos, permitirWeb } from '../scripts/env.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -182,7 +183,7 @@ app.use(
 // atende poucas dezenas de pessoas, não precisa de Redis.
 const authAttempts = new Map();
 const AUTH_RATE_WINDOW_MS = 60 * 1000;
-const AUTH_RATE_MAX = 20;
+const AUTH_RATE_MAX = process.env.NODE_ENV === 'test' ? 500 : 20;
 
 function rateLimit(req, res, next) {
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
@@ -283,6 +284,16 @@ app.post('/api/session', rateLimit, async (req, res) => {
 
     const guildId = /^[0-9]{15,21}$/.test(String(guild_id ?? '')) ? String(guild_id) : null;
     const channelId = /^[0-9]{15,21}$/.test(String(channel_id ?? '')) ? String(channel_id) : null;
+
+    const permitidos = servidoresPermitidos();
+    if (permitidos.length > 0) {
+      if (!guildId || !permitidos.includes(guildId)) {
+        return res.status(403).json({
+          error: 'Esta atividade é de uso exclusivo do servidor Discord autorizado.',
+        });
+      }
+    }
+
     const [presenca, guildName] = await Promise.all([
       inVoiceChannel(guildId, channelId, me.id),
       resolveGuildName(guildId),
@@ -345,6 +356,12 @@ app.post('/api/session-dev', (req, res) => {
 });
 
 app.post('/api/session-guest', rateLimit, (req, res) => {
+  if (!permitirWeb()) {
+    return res.status(403).json({
+      error: 'Acesso web desativado. Abra a aplicação diretamente pelo servidor do Discord.',
+    });
+  }
+
   const raw = String(req.body?.name ?? '')
     .replace(/\s+/g, ' ')
     .trim()
@@ -552,12 +569,21 @@ function issueRoomTokens(roomId, me) {
 app.post('/api/rooms/list', (req, res) => {
   const me = verifyToken(req.body?.identity);
   const instance = me?.scope === 'identity' ? me.instance : WEB_INSTANCE;
+  if (!permitirWeb() && instance === WEB_INSTANCE) {
+    return res.json({ rooms: [] });
+  }
   res.json({ rooms: R.listRooms(instance) });
 });
 
 app.post('/api/rooms/create', (req, res) => {
   const me = identityOf(req, res);
   if (!me) return;
+
+  if (!permitirWeb() && me.instance === WEB_INSTANCE) {
+    return res.status(403).json({
+      error: 'Criação de salas pelo navegador desativada. Use a atividade no Discord.',
+    });
+  }
 
   const { room, error } = R.createRoom({
     instance: me.instance,
@@ -691,6 +717,77 @@ function discordAuthorizeUrl(state = null) {
   return url;
 }
 
+app.get('/focar', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(`<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Trocando de tela…</title>
+  <style>
+    body {
+      margin: 0;
+      background: #1e1f22;
+      color: #f2f3f5;
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      text-align: center;
+    }
+    .card {
+      background: #2b2d31;
+      padding: 24px 32px;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      max-width: 380px;
+    }
+    h2 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 16px; color: #949ba4; font-size: 14px; line-height: 1.4; }
+    button {
+      background: #5865f2;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    button:hover { background: #4752c4; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Trocando de tela…</h2>
+    <p>O navegador foi trazido para a frente! Se esta guia não fechar sozinha, clique abaixo para ir para a transmissão.</p>
+    <button onclick="focarEFaixar()">Ir para a transmissão</button>
+  </div>
+  <script>
+    function focarEFaixar() {
+      try {
+        const w = window.open('', 'discord-screen-captura');
+        if (w && w !== window) w.focus();
+      } catch {}
+      try {
+        const bc = new BroadcastChannel('discord-screenshare-focus');
+        bc.postMessage({ type: 'trocar-tela' });
+        bc.close();
+      } catch {}
+      try {
+        window.open('', '_self');
+        window.close();
+      } catch {}
+    }
+
+    focarEFaixar();
+    setTimeout(focarEFaixar, 200);
+  </script>
+</body>
+</html>`);
+});
+
 app.get('/auth/login', (_req, res) => {
   const url = discordAuthorizeUrl();
   res.redirect(url.toString());
@@ -788,7 +885,7 @@ app.post('/api/logs', (req, res) => {
     entry = { windowStart: now, count: 0 };
     logAttempts.set(ip, entry);
   }
-  
+
   if (entry.count > 100) return res.status(429).end(); // máximo de 100 logs por minuto por ip
   entry.count++;
 
@@ -797,10 +894,10 @@ app.post('/api/logs', (req, res) => {
 
   const timestamp = new Date().toISOString();
   const logLine = `[${timestamp}] [${level || 'error'}] ${message} ${details ? JSON.stringify(details) : ''}\n`;
-  
+
   // Escreve no log assincronamente sem travar o servidor
   fs.appendFile(path.join(__dirname, '..', 'client-errors.log'), logLine, () => {});
-  
+
   res.json({ ok: true });
 });
 
@@ -900,7 +997,13 @@ app.get('/api/config', (_req, res) => {
 
   // || e nao ??: uma variavel vazia no .env chega como string vazia, e o
   // contrato aqui e "null significa nao configurado".
-  res.json({ clientId: DISCORD_CLIENT_ID || null, asset, nativeAudioLocalUrl });
+  res.json({
+    clientId: DISCORD_CLIENT_ID || null,
+    asset,
+    nativeAudioLocalUrl,
+    permitirWeb: permitirWeb(),
+    temServidorRestrito: servidoresPermitidos().length > 0,
+  });
 });
 
 // Activity buildada (produção). Em dev o Vite serve o client na 5173.
@@ -1191,6 +1294,13 @@ function handleViewer(ws, room, auth) {
     // próximo início: era o que fazia o resumo dela envelhecer em silêncio.
     if (msg.type === 'config-broadcast' && msg.opcoes) {
       R.toControls(room, auth.uid, { type: 'config-request', opcoes: msg.opcoes });
+      return;
+    }
+
+    // Pedido vindo da Activity para trocar a tela na aba de captura já aberta.
+    if (msg.type === 'change-screen-broadcast') {
+      const n = R.toControls(room, auth.uid, { type: 'change-screen-request' });
+      if (n) logDev(`[room ${room.id}] ${auth.name} pediu para trocar a tela na aba de captura`);
       return;
     }
 

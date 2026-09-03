@@ -141,8 +141,34 @@ export function opcoesTela({ fps = 30, comSom = false, video } = {}) {
     // continua explícita no seletor do navegador; quem não marcar a caixa
     // recebe somente vídeo.
     opts.systemAudio = 'include';
+    opts.audioSelection = 'preferred';
   }
   return opts;
+}
+
+/**
+ * Pede a captura de tela garantindo compatibilidade total entre navegadores novos e antigos:
+ * 1. Tenta primeiro com as opções avançadas (Chromium + especificação W3C moderna).
+ * 2. Se o navegador for antigo ou restrito e lançar erro por opções desconhecidas
+ *    (TypeError ou OverconstrainedError), repete automaticamente com as opções básicas ({ video: true, audio: Boolean(comSom) }).
+ */
+export async function pedirDisplayMedia(opcoes, { comSom = false } = {}) {
+  try {
+    return await navigator.mediaDevices.getDisplayMedia(opcoes);
+  } catch (err) {
+    if (
+      (err instanceof TypeError ||
+        err?.name === 'TypeError' ||
+        err?.name === 'OverconstrainedError') &&
+      navigator.mediaDevices?.getDisplayMedia
+    ) {
+      return await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: Boolean(comSom),
+      });
+    }
+    throw err;
+  }
 }
 
 /**
@@ -209,6 +235,7 @@ export function createBroadcaster({
   onStats,
   onEnd,
   onAviso,
+  nativeAudioProof = null,
   onTrackEnded,
 }) {
   let ws = null;
@@ -218,6 +245,7 @@ export function createBroadcaster({
   let audioEncoder = null;
   let audioReader = null;
   let nativeAudio = false;
+  let nativeAudioRequesting = false;
   // Pediram som, mas a superfície escolhida traria o Discord junto. Guardado
   // para a interface poder oferecer a saída em vez de só avisar e esquecer.
   let somBloqueado = false;
@@ -247,6 +275,8 @@ export function createBroadcaster({
   let networkDrops = 0;
   let outputLimitIndex = 0;
   let networkPressureWindows = 0;
+  let networkHealthyWindows = 0;
+  let requestedBitrate = bitrate;
   let relayCongestion = false;
   let displaySurface = null;
   let reconnectAttempts = 0;
@@ -263,7 +293,9 @@ export function createBroadcaster({
       if ('wakeLock' in navigator) {
         wakeLock = await navigator.wakeLock.request('screen').catch(() => null);
       }
-    } catch { /* sem wake lock a transmissão segue; só perde a trava de tela */ }
+    } catch {
+      /* sem wake lock a transmissão segue; só perde a trava de tela */
+    }
 
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -280,23 +312,33 @@ export function createBroadcaster({
           antiSleepAudioCtx.resume().catch(() => {});
         }
       }
-    } catch { /* áudio anti-suspensão é opcional */ }
+    } catch {
+      /* áudio anti-suspensão é opcional */
+    }
   }
 
   function stopAntiSleep() {
     try {
       wakeLock?.release()?.catch?.(() => {});
       wakeLock = null;
-    } catch { /* já liberado */ }
+    } catch {
+      /* já liberado */
+    }
     try {
       antiSleepAudioCtx?.close()?.catch?.(() => {});
       antiSleepAudioCtx = null;
-    } catch { /* já fechado */ }
+    } catch {
+      /* já fechado */
+    }
   }
 
   function createEncoder() {
     if (encoder && encoder.state !== 'closed') {
-      try { encoder.close(); } catch { /* o navegador pode já ter fechado */ }
+      try {
+        encoder.close();
+      } catch {
+        /* o navegador pode já ter fechado */
+      }
     }
     encoder = new VideoEncoder({
       output: onEncoded,
@@ -323,7 +365,7 @@ export function createBroadcaster({
         stop(
           fonte === 'camera'
             ? 'A câmera foi desligada.'
-            : 'Você parou o compartilhamento pelo navegador.'
+            : 'Você parou o compartilhamento pelo navegador.',
         );
       }
     });
@@ -331,7 +373,7 @@ export function createBroadcaster({
     // Reduzir uma captura 4K no canvas a cada quadro é especialmente caro no
     // Firefox. Reaplica o teto depois da escolha para o navegador/Windows fazer
     // o redimensionamento na origem, inclusive quando o stream veio da prévia.
-    if (fonte === 'tela') await track.applyConstraints?.(captureConstraints(fps)).catch(() => { });
+    if (fonte === 'tela') await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
 
     const s = track.getSettings();
     const target = fitWithin(s.width ?? 1280, s.height ?? 720);
@@ -398,7 +440,7 @@ export function createBroadcaster({
   }
 
   function capturarTela() {
-    return navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+    return pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
   }
 
   /**
@@ -586,9 +628,9 @@ export function createBroadcaster({
     }
 
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const escolha = await navigator.mediaDevices.getDisplayMedia(
-      opcoesCaptura({ video: true, comSom: true }),
-    );
+    const escolha = await pedirDisplayMedia(opcoesCaptura({ video: true, comSom: true }), {
+      comSom: true,
+    });
 
     const faixa = escolha.getAudioTracks()[0];
     const superficie = escolha.getVideoTracks()[0]?.getSettings?.().displaySurface;
@@ -616,7 +658,7 @@ export function createBroadcaster({
 
     // Encerra o laço anterior antes de abrir outro, senão os dois alimentam o
     // mesmo encoder e a fila estoura.
-    await audioReader?.cancel().catch(() => { });
+    await audioReader?.cancel().catch(() => {});
     audioReader = null;
     if (audioEncoder?.state === 'configured') {
       try {
@@ -723,11 +765,25 @@ export function createBroadcaster({
     return /Firefox\//i.test(navigator.userAgent) && !window.MediaStreamTrackProcessor;
   }
 
-  function requestNativeAudio() {
-    if (!running || ws?.readyState !== WebSocket.OPEN) return;
+  async function requestNativeAudio() {
+    if (!running || ws?.readyState !== WebSocket.OPEN || nativeAudioRequesting) return;
     nativeAudio = false;
-    ws.send(JSON.stringify({ type: 'native-audio-start', application: 'firefox' }));
+    nativeAudioRequesting = true;
     onAviso?.('Ligando o áudio isolado do Firefox…');
+    try {
+      if (!nativeAudioProof) {
+        throw new Error(
+          'O áudio isolado do Firefox exige a página externa no computador que está executando o INICIAR.',
+        );
+      }
+      const proof = await nativeAudioProof();
+      if (!running || ws?.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ type: 'native-audio-start', application: 'firefox', proof }));
+    } catch (err) {
+      onAviso?.(err.message || 'Não foi possível alcançar o capturador de áudio local.');
+    } finally {
+      nativeAudioRequesting = false;
+    }
   }
 
   async function pickConfig(width, height) {
@@ -765,18 +821,20 @@ export function createBroadcaster({
     let frameTimeout = null;
     const alertStuck = () => {
       if (!running) return;
-      onAviso?.('A captura travou: o Windows parou de entregar quadros do jogo. Rode o CORRIGIR_TRANSMISSAO_JOGOS.bat como administrador, REINICIE o PC e transmita pelo navegador do TRANSMITIR_SEM_TRAVAR.bat.');
+      onAviso?.(
+        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
+      );
       console.error('Captura de vídeo parou de emitir quadros.');
     };
-    
+
     while (running) {
       let frame;
       try {
         clearTimeout(frameTimeout);
         frameTimeout = setTimeout(alertStuck, 5000);
-        
+
         const { done, value } = await reader.read();
-        
+
         if (done) break;
         frame = value;
       } catch (err) {
@@ -804,7 +862,7 @@ export function createBroadcaster({
       opacity: '0',
     });
     document.body.append(video);
-    video.play()?.catch?.(() => { });
+    video.play()?.catch?.(() => {});
 
     const t0 = performance.now();
     const hasRvfc = typeof video.requestVideoFrameCallback === 'function';
@@ -825,7 +883,9 @@ export function createBroadcaster({
     let tickTimeout = null;
     const alertStuck = () => {
       if (!running) return;
-      onAviso?.('A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.');
+      onAviso?.(
+        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
+      );
       console.error('Captura de vídeo parou de emitir quadros.');
     };
 
@@ -834,7 +894,7 @@ export function createBroadcaster({
       clearTimeout(tickTimeout);
       tickTimeout = setTimeout(alertStuck, 5000);
 
-      if (video.paused) video.play()?.catch?.(() => { });
+      if (video.paused) video.play()?.catch?.(() => {});
       if (video.readyState < 2 || !video.videoWidth) return rescheduleFallback();
 
       const now = performance.now();
@@ -865,6 +925,7 @@ export function createBroadcaster({
           displaySurface !== 'browser' &&
           frameClock &&
           qualityCounterActive &&
+          !wantKeyframe &&
           presentedFrames === lastPresentedFrames
         ) {
           return;
@@ -899,7 +960,7 @@ export function createBroadcaster({
       frame.close();
       return false;
     }
-    
+
     if (encoder?.state !== 'configured') {
       try {
         console.warn('Encoder em estado inválido, tentando recriar...');
@@ -910,7 +971,7 @@ export function createBroadcaster({
         return false;
       }
     }
-    
+
     capturedFrames++;
 
     // WebSocket é TCP: continuar codificando quando a saída já acumulou dados
@@ -996,7 +1057,7 @@ export function createBroadcaster({
       stream
         ?.getVideoTracks()[0]
         ?.applyConstraints(captureConstraints(fps, target.width, target.height))
-        .catch(() => { });
+        .catch(() => {});
       wantKeyframe = true;
       onStatus?.({
         codec: config.codec,
@@ -1017,7 +1078,35 @@ export function createBroadcaster({
     relayCongestion = false;
     const congested =
       relayCongested || (capturedFrames >= 10 && networkDrops / capturedFrames >= 0.2);
-    networkPressureWindows = congested ? networkPressureWindows + 1 : 0;
+    if (!congested) {
+      networkPressureWindows = 0;
+      const enoughFrames = capturedFrames >= Math.max(10, Math.round(fps / 4));
+      const maxBuffered = Math.max(MIN_WS_BUFFER, bitrate / 8 / 4);
+      const outputClear = (ws?.bufferedAmount ?? 0) < maxBuffered / 4;
+      networkHealthyWindows =
+        bitrate < requestedBitrate && enoughFrames && outputClear ? networkHealthyWindows + 1 : 0;
+
+      if (networkHealthyWindows < 6) return;
+
+      const nextBitrate = Math.min(
+        requestedBitrate,
+        Math.ceil(Math.max(bitrate * 1.2, bitrate + 300_000) / 100_000) * 100_000,
+      );
+      networkHealthyWindows = 0;
+      if (nextBitrate <= bitrate) return;
+
+      bitrate = nextBitrate;
+      config = { ...config, bitrate };
+      encoder?.configure?.(config);
+      wantKeyframe = true;
+      onAviso?.(
+        `A rede estabilizou; a qualidade subiu para ${(bitrate / 1_000_000).toFixed(1)} Mb/s.`,
+      );
+      return;
+    }
+
+    networkHealthyWindows = 0;
+    networkPressureWindows++;
     if (networkPressureWindows < 2 || bitrate <= 1_200_000) return;
 
     const nextBitrate = Math.max(1_200_000, Math.floor((bitrate * 0.75) / 100_000) * 100_000);
@@ -1026,7 +1115,7 @@ export function createBroadcaster({
     bitrate = nextBitrate;
     networkPressureWindows = 0;
     config = { ...config, bitrate };
-    encoder.configure(config);
+    encoder?.configure?.(config);
     wantKeyframe = true;
     onAviso?.(
       `A rede ficou congestionada; o bitrate foi ajustado para ${(bitrate / 1_000_000).toFixed(1)} Mb/s para evitar travamentos.`,
@@ -1183,7 +1272,10 @@ export function createBroadcaster({
           mySlot = msg.slot;
           pronto();
         } else if (msg.type === 'state') {
-          const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
+          const myStream =
+            mySlot !== null && Array.isArray(msg.streams)
+              ? msg.streams.find((s) => s.slot === mySlot)
+              : null;
           if (myStream?.watchers) {
             watchers = myStream.watchers;
             viewers = watchers.length;
@@ -1235,11 +1327,10 @@ export function createBroadcaster({
     }
 
     reconnectAttempts++;
-    const delay = Math.min(
-      RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1),
-      10_000,
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1), 10_000);
+    onAviso?.(
+      `Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
     );
-    onAviso?.(`Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
     reconnectTimer = setTimeout(async () => {
       if (!running) return;
@@ -1266,15 +1357,17 @@ export function createBroadcaster({
               clearTimeout(timeout);
               resolve();
             } else if (msg.type === 'state') {
-              const myStream = mySlot !== null && Array.isArray(msg.streams) ? msg.streams.find((s) => s.slot === mySlot) : null;
+              const myStream =
+                mySlot !== null && Array.isArray(msg.streams)
+                  ? msg.streams.find((s) => s.slot === mySlot)
+                  : null;
               if (myStream?.watchers) {
                 watchers = myStream.watchers;
                 viewers = watchers.length;
               } else {
                 viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
               }
-            }
-            else if (msg.type === 'need-keyframe') wantKeyframe = true;
+            } else if (msg.type === 'need-keyframe') wantKeyframe = true;
             else if (msg.type === 'relay-congestion') relayCongestion = true;
             else if (msg.type === 'native-audio-ready') {
               nativeAudio = true;
@@ -1299,7 +1392,10 @@ export function createBroadcaster({
 
           let resolvido = false;
           const origResolve = resolve;
-          resolve = (v) => { resolvido = true; origResolve(v); };
+          resolve = (v) => {
+            resolvido = true;
+            origResolve(v);
+          };
         });
 
         // Reconectou com sucesso.
@@ -1356,7 +1452,7 @@ export function createBroadcaster({
    */
   async function changeScreen() {
     // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const fresh = await navigator.mediaDevices.getDisplayMedia(opcoesCaptura());
+    const fresh = await pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
 
     const previous = stream;
     const previousReader = reader;
@@ -1364,14 +1460,14 @@ export function createBroadcaster({
     stream = fresh;
     const track = fresh.getVideoTracks()[0];
     displaySurface = track.getSettings?.().displaySurface ?? null;
-    await track.applyConstraints?.(captureConstraints(fps)).catch(() => { });
+    await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
     track.contentHint = 'motion';
     track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
     // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
     // encoder e a fila estoura.
     reader = null;
-    await previousReader?.cancel().catch(() => { });
+    await previousReader?.cancel().catch(() => {});
     previous?.getTracks().forEach((t) => t.stop());
 
     // Zera o tamanho conhecido: a tela nova quase certamente tem outro, e é o
@@ -1382,13 +1478,13 @@ export function createBroadcaster({
 
     if (video) {
       video.srcObject = fresh;
-      video.play().catch(() => { });
+      video.play().catch(() => {});
     } else {
       pumpDirect(track);
     }
 
     // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
-    await audioReader?.cancel().catch(() => { });
+    await audioReader?.cancel().catch(() => {});
     audioReader = null;
     if (audioEncoder?.state === 'configured') {
       try {
@@ -1406,7 +1502,10 @@ export function createBroadcaster({
 
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */
   function setQuality({ bitrate: nextBitrate, fps: nextFps } = {}) {
-    if (nextBitrate) bitrate = nextBitrate;
+    if (nextBitrate) {
+      bitrate = nextBitrate;
+      requestedBitrate = nextBitrate;
+    }
     if (nextFps) fps = nextFps;
     if (encoder?.state !== 'configured') return;
 
@@ -1435,7 +1534,7 @@ export function createBroadcaster({
     stream
       ?.getVideoTracks()[0]
       ?.applyConstraints(captureConstraints(fps))
-      .catch(() => { });
+      .catch(() => {});
   }
 
   const getSettings = () => ({ bitrate, fps });
@@ -1467,9 +1566,9 @@ export function createBroadcaster({
     clearInterval(statsTimer);
     statsTimer = null;
 
-    reader?.cancel().catch(() => { });
+    reader?.cancel().catch(() => {});
     reader = null;
-    audioReader?.cancel().catch(() => { });
+    audioReader?.cancel().catch(() => {});
     audioReader = null;
 
     for (const e of [encoder, audioEncoder]) {

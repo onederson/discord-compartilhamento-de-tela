@@ -5,7 +5,6 @@ import { withTimeout } from './async.js';
 import { enterImmersive, fullscreenElement, leaveImmersive } from './immersive.js';
 import { canCaptureScreen, defaultBroadcastQuality, isMobileClient } from './platform.js';
 import { recoverableSlots, shouldRecoverStream } from './recovery.js';
-import { createBroadcaster } from '../../shared/broadcaster.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -27,14 +26,16 @@ function reportLog(level, message, details = {}) {
   fetch(`${P}/api/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ level, message, details })
+    body: JSON.stringify({ level, message, details }),
   }).catch(() => {});
 }
 
 const originalConsoleError = console.error;
 console.error = function (...args) {
   originalConsoleError.apply(console, args);
-  const message = args.map(a => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ');
+  const message = args
+    .map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .join(' ');
   reportLog('error', message);
 };
 
@@ -250,6 +251,7 @@ function entradasDoGrid() {
 function watchSlot(slot) {
   const info = available.get(slot);
   if (!info) return;
+  activeSlot = slot;
   watching.add(slot);
   ws?.send(JSON.stringify({ type: 'watch', slot }));
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
@@ -294,6 +296,10 @@ function unwatchSlot(slot) {
   watching.delete(slot);
   ws?.send(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
+  if (activeSlot === slot) {
+    const proxima = [...watching].find((s) => available.has(s));
+    activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
+  }
   renderGrid();
   renderBar();
 }
@@ -391,9 +397,10 @@ function renderGrid() {
     if (telaCheia) liberarImersao();
     telaCheia = false;
   } else if (activeSlot === null || !available.has(activeSlot)) {
-    // Sempre há uma tela em destaque quando existe transmissão: chegar numa
-    // sala com tela no ar e ver só avatares esconderia o que importa.
-    activeSlot = entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
+    // Sempre há uma tela em destaque quando existe transmissão.
+    // Prioriza uma tela que o usuário já está assistindo; se não houver, pega a primeira disponível.
+    const assistindo = [...watching].find((s) => available.has(s));
+    activeSlot = assistindo ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
   // Quem chegou pelo link da atividade já pediu para assistir lá atrás: parar
@@ -1025,7 +1032,9 @@ function renderBar() {
 
 /** Prepara o lugar do transmissor; o decoder só nasce quando o config chega. */
 function openStream(slot, userId) {
+  const wasActive = activeSlot === slot;
   closeStream(slot);
+  if (wasActive) activeSlot = slot;
 
   const canvas = document.createElement('canvas');
   const s = {
@@ -1126,6 +1135,11 @@ function endStream(slot) {
     for (const id of ['pLag', 'pFps', 'pRes']) $(id).textContent = '—';
   }
 
+  if (activeSlot === slot) {
+    const proxima = [...watching].find((s) => available.has(s));
+    activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
+  }
+
   renderGrid();
   renderBar();
 }
@@ -1196,13 +1210,42 @@ async function boot() {
   // Buscada em paralelo, nunca antes: ela traz o diagnóstico de versão e o
   // client id de reserva, e nenhum dos dois vale segurar o login.
   const config = loadConfig();
+  const cfg = await config;
 
-  // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
-  // criar e entrar é que pedem identidade.
-  session = inDiscord ? await authDiscord(config) : await authWeb();
+  const ingresso = params.get('t');
+  if (!inDiscord && !cfg.permitirWeb && !ingresso) {
+    clearTimeout(vigia);
+    $('lobby')?.setAttribute('hidden', '');
+    document.querySelector('.bottombar')?.classList.add('hidden');
+    setEmpty(
+      'Aplicação Exclusiva do Discord',
+      'Esta aplicação é privada e de uso exclusivo dos membros dentro do canal de voz do Discord. Para utilizá-la, entre na call do servidor e inicie a Atividade.',
+      false,
+    );
+    return;
+  }
 
-  clientId = params.get('client_id') || (await config).clientId || null;
-  checkVersion((await config).asset);
+  try {
+    session = inDiscord ? await authDiscord(config) : await authWeb();
+  } catch (err) {
+    clearTimeout(vigia);
+    $('lobby')?.setAttribute('hidden', '');
+    document.querySelector('.bottombar')?.classList.add('hidden');
+    setEmpty(
+      err.status === 403 ? 'Acesso Restrito' : 'Não foi possível conectar',
+      err.message,
+      err.status !== 403,
+    );
+    return;
+  }
+
+  if (!session && !inDiscord && !ingresso) {
+    clearTimeout(vigia);
+    return;
+  }
+
+  clientId = params.get('client_id') || cfg.clientId || null;
+  checkVersion(cfg.asset);
   clearTimeout(vigia);
 
   renderProfileButton();
@@ -1215,8 +1258,6 @@ async function boot() {
 
   // Lido antes de showLobby, que limpa o parâmetro da URL ao voltar ao lobby.
   const alvo = new URLSearchParams(location.search).get('sala');
-  // Do ?t= não: ele é lido do params do arranque, capturado antes de tudo.
-  const ingresso = params.get('t');
 
   await showLobby();
   if (ingresso) return abrirPeloIngresso(ingresso);
@@ -2307,9 +2348,18 @@ $('changeScreen')?.addEventListener('click', async () => {
     return;
   }
 
-  if (minhasFontes().has('tela')) {
-    trazerAba('tela');
+  if (minhasFontes().has('tela') || abaAberta()) {
+    ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
+
+    const origem = origemDoSite();
+    if (inDiscord && origem) {
+      sdk?.commands?.openExternalLink({ url: `${origem}/focar` })?.catch(() => {});
+    }
+    toast('Trazendo o navegador para a frente para trocar a tela…');
+    return;
   }
+
+  ligarFonte('tela');
 });
 
 $('camera').addEventListener('click', () => {
