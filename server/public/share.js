@@ -88,7 +88,16 @@ window.name = 'discord-screen-captura';
 try {
   const focusBc = new BroadcastChannel('discord-screenshare-focus');
   focusBc.addEventListener('message', (e) => {
-    if (e.data?.type === 'trocar-tela') {
+    const data = e.data;
+    if (!data) return;
+
+    if (data.type === 'fechar-todas') {
+      fecharAba();
+      return;
+    }
+
+    if (data.type === 'trocar-tela' || (data.type === 'focar' && data.acao === 'trocar-tela')) {
+      window.name = 'discord-screen-captura';
       window.focus();
       chamar('tela');
       const painel = paineis.tela;
@@ -107,6 +116,37 @@ try {
           );
         }
       }
+      return;
+    }
+
+    if (data.fonte === 'camera' || (data.type === 'focar' && data.fonte === 'camera')) {
+      window.name = 'discord-screen-captura';
+      window.focus();
+      chamar('camera');
+      const painel = paineis.camera;
+      if (painel && !painel.ativo() && !painel.indisponivel()) {
+        painel.verCamera?.();
+      }
+      return;
+    }
+
+    if (data.fonte === 'tela' || (data.type === 'focar' && data.fonte === 'tela')) {
+      window.name = 'discord-screen-captura';
+      window.focus();
+      chamar('tela');
+      const painel = paineis.tela;
+      if (painel && !painel.ativo() && !painel.indisponivel()) {
+        painel.setStatus(
+          'Clique no botão "Compartilhar a tela" abaixo para escolher o que transmitir.',
+          'aviso',
+        );
+      }
+      return;
+    }
+
+    if (data.type === 'focar') {
+      window.name = 'discord-screen-captura';
+      window.focus();
     }
   });
 } catch {
@@ -128,6 +168,30 @@ function falhar(titulo, msg) {
   const el = $('pageStatus');
   el.textContent = `${titulo} ${msg}`;
   el.className = 'status error';
+}
+
+function fecharAba() {
+  for (const f of FONTES) paineis[f]?.parar();
+  if (controle) {
+    clearTimeout(religar);
+    religar = 'morto';
+    try {
+      controle.close();
+    } catch {
+      /* ignora erro ao fechar socket */
+    }
+    controle = null;
+  }
+  falhar(
+    'Janela encerrada.',
+    'Esta janela foi fechada porque uma nova transmissão foi iniciada no Discord.',
+  );
+  try {
+    window.open('', '_self');
+    window.close();
+  } catch {
+    /* navegador pode impedir fechar janela via script */
+  }
 }
 
 // --------------------------------------------------------------- chamamento
@@ -231,8 +295,32 @@ function ligarControle() {
       return;
     }
 
-    if (msg.type === 'start-request') atenderPedido(msg.fonte, msg.opcoes);
-    else if (msg.type === 'config-request') aplicarConfig(msg.opcoes);
+    if (msg.type === 'start-request') {
+      window.name = 'discord-screen-captura';
+      window.focus();
+      atenderPedido(msg.fonte, msg.opcoes);
+
+      if (
+        msg.fonte === 'camera' &&
+        'Notification' in window &&
+        Notification.permission === 'granted' &&
+        document.hidden
+      ) {
+        try {
+          const notif = new Notification('Ligar câmera no Discord', {
+            body: 'Clique aqui para abrir a câmera na transmissão.',
+            tag: 'discord-ligar-camera',
+          });
+          notif.onclick = () => {
+            window.focus();
+            notif.close();
+            paineis.camera?.verCamera();
+          };
+        } catch {
+          /* notificações podem estar bloqueadas */
+        }
+      }
+    } else if (msg.type === 'config-request') aplicarConfig(msg.opcoes);
     else if (msg.type === 'change-screen-request') {
       window.name = 'discord-screen-captura';
       window.focus();
@@ -269,6 +357,8 @@ function ligarControle() {
           // Notificação do sistema indisponível ou bloqueada pelo SO.
         }
       }
+    } else if (msg.type === 'close-request') {
+      fecharAba();
     } else if (msg.type === 'room-gone') {
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.

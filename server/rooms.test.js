@@ -830,6 +830,25 @@ describe('aba de captura', () => {
 
     expect(R.toControls(room, 'alice', { type: 'start-request' })).toBe(0);
   });
+
+  it('conta abas abertas e reflete em countControls e no estado', () => {
+    const { room } = salaComEspectador();
+    const aba1 = socket();
+    const aba2 = socket();
+    R.attachControl(room, aba1, 'alice');
+    R.attachControl(room, aba2, 'alice');
+
+    expect(R.countControls(room, 'alice')).toBe(2);
+    expect(R.countControls(room, 'bob')).toBe(0);
+
+    const st = R.roomState(room);
+    expect(st.abas).toContain('alice');
+    expect(st.abasCount).toEqual({ alice: 2 });
+
+    R.detachControl(room, aba1);
+    expect(R.countControls(room, 'alice')).toBe(1);
+    expect(R.roomState(room).abasCount).toEqual({ alice: 1 });
+  });
 });
 
 describe('sendJson', () => {
