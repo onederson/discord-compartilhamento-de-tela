@@ -105,13 +105,13 @@ try {
         try {
           painel.trocarTela()?.catch(() => {
             painel.setStatus(
-              'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+              'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
               'aviso',
             );
           });
         } catch {
           painel.setStatus(
-            'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+            'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
             'aviso',
           );
         }
@@ -126,6 +126,10 @@ try {
       const painel = paineis.camera;
       if (painel && !painel.ativo() && !painel.indisponivel()) {
         painel.verCamera?.();
+        painel.setStatus(
+          'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+          'aviso',
+        );
       }
       return;
     }
@@ -137,7 +141,7 @@ try {
       const painel = paineis.tela;
       if (painel && !painel.ativo() && !painel.indisponivel()) {
         painel.setStatus(
-          'Clique no botão "Compartilhar a tela" abaixo para escolher o que transmitir.',
+          'Clique no botão "Escolher janela ou tela" acima para iniciar a transmissão.',
           'aviso',
         );
       }
@@ -301,6 +305,24 @@ function ligarControle() {
       window.focus();
       atenderPedido(msg.fonte, msg.opcoes);
 
+      if (msg.fonte === 'tela') {
+        const painel = paineis.tela;
+        if (painel && !painel.ativo() && !painel.indisponivel()) {
+          painel.setStatus(
+            'Clique no botão "Escolher janela ou tela" acima para iniciar a transmissão.',
+            'aviso',
+          );
+        }
+      } else if (msg.fonte === 'camera') {
+        const painel = paineis.camera;
+        if (painel && !painel.ativo() && !painel.indisponivel()) {
+          painel.setStatus(
+            'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+            'aviso',
+          );
+        }
+      }
+
       if (
         msg.fonte === 'camera' &&
         'Notification' in window &&
@@ -331,13 +353,13 @@ function ligarControle() {
         try {
           painel.trocarTela()?.catch(() => {
             painel.setStatus(
-              'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+              'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
               'aviso',
             );
           });
         } catch {
           painel.setStatus(
-            'Clique no botão "Trocar de tela ou janela" abaixo para selecionar a nova tela.',
+            'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
             'aviso',
           );
         }
@@ -425,7 +447,7 @@ function criarPainel(fonte) {
     stream.getVideoTracks()[0]?.addEventListener('ended', () => {
       if (previa === stream) {
         pararPrevia();
-        setStatus(camera ? 'A câmera foi desligada.' : 'O compartilhamento acabou.');
+        setStatus(camera ? 'Prévia da câmera fechada.' : 'Prévia da tela fechada.');
       }
     });
   }
@@ -458,7 +480,7 @@ function criarPainel(fonte) {
       dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia — ainda não está no ar.');
+      setStatus('Prévia ativa — clique no botão "Ligar a câmera" acima para transmitir.');
       await listarCameras();
     } catch (err) {
       setStatus(
@@ -478,7 +500,7 @@ function criarPainel(fonte) {
       });
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia — ainda não está no ar.');
+      setStatus('Prévia ativa — clique no botão "Escolher janela ou tela" acima para transmitir.');
     } catch (err) {
       // Cancelar o seletor é escolha, não falha.
       if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
@@ -627,6 +649,16 @@ function criarPainel(fonte) {
         }
       },
       onAviso: (msg) => {
+        if (!msg) {
+          if (broadcaster?.getSettings) {
+            const s = broadcaster.getSettings();
+            setStatus(
+              `Transmitindo · ${s.fps} fps · ${(s.bitrate / 1_000_000).toFixed(1)} Mb/s`,
+              'ok',
+            );
+          }
+          return;
+        }
         if (msg === 'Áudio isolado do Firefox ligado.') {
           $('somAba').textContent = 'Reiniciar áudio do Firefox';
           setStatus(msg, 'ok');
@@ -763,10 +795,10 @@ const payload = token && readTokenPayload();
 const missing = supportError();
 
 if (!payload) {
-  falhar('Link inválido.', 'Volte à atividade no Discord e clique em compartilhar novamente.');
+  falhar('Link inválido.', 'Volte à atividade no Discord e inicie a transmissão novamente.');
   // `exp` é opcional: tokens de sala não expiram, a sala é que fecha.
 } else if (payload.exp && payload.exp * 1000 < Date.now()) {
-  falhar('Link expirado.', 'Gere um novo pela atividade.');
+  falhar('Link expirado.', 'Volte à atividade no Discord para gerar um novo acesso.');
 } else if (missing) {
   falhar('Navegador sem suporte.', missing);
 } else {
@@ -794,7 +826,7 @@ $('somAba').addEventListener('click', async () => {
   try {
     const result = await paineis.tela.trocarSom();
     if (result?.native) return;
-    paineis.tela.setStatus('Som ligado, vindo da fonte escolhida.', 'ok');
+    paineis.tela.setStatus('Áudio conectado da fonte selecionada.', 'ok');
     $('somAba').textContent = 'Trocar a fonte do som';
   } catch (err) {
     // Cancelar a segunda janela é escolha, não falha.

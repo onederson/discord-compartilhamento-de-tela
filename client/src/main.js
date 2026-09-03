@@ -1901,10 +1901,16 @@ function connect() {
       renderGrid();
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
+      const anterior = info?.config;
+      const configMudou = !anterior || JSON.stringify(anterior) !== JSON.stringify(msg.config);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        openStream(msg.slot, info?.userId ?? msg.slot);
-        startStream(msg.slot, msg.config);
+        if (!streams.has(msg.slot)) {
+          openStream(msg.slot, info?.userId ?? msg.slot);
+          startStream(msg.slot, msg.config);
+        } else if (configMudou) {
+          startStream(msg.slot, msg.config);
+        }
       }
     } else if (msg.type === 'audio-config') {
       // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
