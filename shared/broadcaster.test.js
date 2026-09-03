@@ -965,6 +965,26 @@ describe('quadros', () => {
 
     expect(encoder.codificados).toHaveLength(0);
   });
+
+  it('não dispara falso alerta de driver travado quando a captura é de janela ou já está no ar', async () => {
+    const onAviso = vi.fn();
+    const stream = telaSimples({ width: 1280, height: 720, displaySurface: 'window' });
+    const { b } = await noAr({ onAviso }, stream);
+
+    vi.useFakeTimers();
+    try {
+      processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Espera 6 segundos sem nenhum novo quadro chegar (simulando Alt-Tab)
+      await vi.advanceTimersByTimeAsync(6000);
+
+      expect(onAviso).not.toHaveBeenCalledWith(expect.stringMatching(/driver de vídeo parou/));
+      b.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('som', () => {

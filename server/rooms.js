@@ -150,7 +150,7 @@ const transmitindo = (room, userId) => broadcastersOf(room, userId).length > 0;
  * A aba de captura não conta: ela tem conexão própria e continua de pé depois
  * que a atividade fecha, que é justamente o caso a detectar.
  */
-function temViewer(room, userId) {
+export function temViewer(room, userId) {
   for (const v of room.viewers) if (v.__info?.id === userId) return true;
   return false;
 }
@@ -402,7 +402,32 @@ function countPeople(room) {
  * O `stop-request` faz a aba encerrar por conta própria e dizer o motivo. O
  * `detachBroadcaster` vem junto e não depende dela: uma aba travada, ou que
  * perdeu o socket, não pode continuar segurando a tela no ar.
+/**
+ * Encerra imediatamente as transmissões e abas de controle de quem saiu da atividade.
  */
+export function encerrarPresenca(
+  room,
+  userId,
+  motivo = 'Você saiu da atividade, então a transmissão parou.',
+) {
+  const alvos = broadcastersOf(room, userId);
+  for (const entry of alvos) {
+    sendJson(entry.ws, {
+      type: 'stop-request',
+      motivo,
+    });
+    detachBroadcaster(room, entry.ws);
+  }
+  for (const wsControl of [...room.controles]) {
+    if (wsControl.__controlOf === userId) {
+      sendJson(wsControl, { type: 'close-request' });
+      detachControl(room, wsControl);
+    }
+  }
+  broadcastState(room);
+  return alvos.length;
+}
+
 function derrubarAbandonadas(room, now) {
   for (const entry of room.broadcasters.values()) {
     if (temViewer(room, entry.info.id)) {
@@ -415,12 +440,8 @@ function derrubarAbandonadas(room, now) {
     }
     if (now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
 
-    sendJson(entry.ws, {
-      type: 'stop-request',
-      motivo: 'Você saiu da atividade, então a transmissão parou.',
-    });
     logDev(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
-    detachBroadcaster(room, entry.ws);
+    encerrarPresenca(room, entry.info.id, 'Você saiu da atividade, então a transmissão parou.');
   }
 }
 

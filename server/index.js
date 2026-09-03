@@ -700,6 +700,35 @@ app.post('/api/rooms/password', (req, res) => {
   res.json({ ok: true, locked: Boolean(room.password) });
 });
 
+app.post('/api/rooms/leave', (req, res) => {
+  let auth = null;
+  let roomId = req.body?.roomId;
+
+  if (req.body?.token) {
+    const dec = verifyToken(req.body.token);
+    if (dec && dec.room) {
+      auth = dec;
+      roomId = roomId || dec.room;
+    }
+  }
+
+  if (!auth) {
+    const me = identityOf(req, res);
+    if (me) auth = me;
+  }
+
+  if (!auth?.uid) {
+    return res.status(401).json({ error: 'Não autorizado.' });
+  }
+
+  const room = roomId ? R.getRoom(roomId) : null;
+  if (room) {
+    R.encerrarPresenca(room, auth.uid, 'Você saiu da atividade, então a transmissão parou.');
+  }
+
+  res.json({ ok: true });
+});
+
 // ------------------------------------------------- login web (fora do Discord)
 
 // Quem entra pelo site não tem canal de voz, então todas essas pessoas
@@ -1353,8 +1382,24 @@ function handleViewer(ws, room, auth) {
     }
   });
 
-  ws.on('close', () => R.detachViewer(room, ws));
-  ws.on('error', () => R.detachViewer(room, ws));
+  const aoDesconectarViewer = () => {
+    R.detachViewer(room, ws);
+    if (!R.temViewer(room, auth.uid)) {
+      const paradas = R.encerrarPresenca(
+        room,
+        auth.uid,
+        'Você saiu da atividade, então a transmissão parou.',
+      );
+      if (paradas) {
+        logDev(
+          `[room ${room.id}] ${auth.name} saiu da atividade — ${paradas} transmissão(ões) encerrada(s) imediatamente`,
+        );
+      }
+    }
+  };
+
+  ws.on('close', aoDesconectarViewer);
+  ws.on('error', aoDesconectarViewer);
 }
 
 // Derruba sockets mortos — sem isso o contador de viewers fica mentindo.

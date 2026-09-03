@@ -254,6 +254,10 @@ export function createBroadcaster({
   let config = null;
   let stage = null;
   let stageCtx = null;
+  let ultimoQuadro = null;
+  let ultimoQuadroAt = 0;
+  let idleTimer = null;
+  let avisoTravamentoAtivo = false;
 
   let running = false;
   // Null até o servidor atribuir de fato. Usar 0 como provisório fazia o
@@ -404,6 +408,8 @@ export function createBroadcaster({
       direct: Boolean(window.MediaStreamTrackProcessor),
       captureFps: s.frameRate ?? null,
     });
+
+    startIdleHeartbeat();
 
     statsTimer = setInterval(() => {
       adaptVideoQuality();
@@ -821,6 +827,8 @@ export function createBroadcaster({
     let frameTimeout = null;
     const alertStuck = () => {
       if (!running) return;
+      if (displaySurface === 'window' || capturedFrames > 10) return;
+      avisoTravamentoAtivo = true;
       onAviso?.(
         'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
       );
@@ -837,6 +845,10 @@ export function createBroadcaster({
 
         if (done) break;
         frame = value;
+        if (avisoTravamentoAtivo) {
+          avisoTravamentoAtivo = false;
+          onAviso?.(null);
+        }
       } catch (err) {
         console.error('Erro na leitura do frame:', err);
         break;
@@ -883,6 +895,8 @@ export function createBroadcaster({
     let tickTimeout = null;
     const alertStuck = () => {
       if (!running) return;
+      if (displaySurface === 'window' || capturedFrames > 10) return;
+      avisoTravamentoAtivo = true;
       onAviso?.(
         'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
       );
@@ -938,6 +952,10 @@ export function createBroadcaster({
         frame = new VideoFrame(video, { timestamp: (now - t0) * 1000 });
       } catch {
         return rescheduleFallback();
+      }
+      if (avisoTravamentoAtivo) {
+        avisoTravamentoAtivo = false;
+        onAviso?.(null);
       }
       encodeFrame(frame);
       rescheduleFallback();
@@ -1003,6 +1021,18 @@ export function createBroadcaster({
       out = new VideoFrame(stage, { timestamp });
     }
 
+    if (typeof out.clone === 'function') {
+      try {
+        ultimoQuadro?.close();
+        ultimoQuadro = out.clone();
+      } catch {
+        /* ignora erro ao clonar */
+      }
+    } else {
+      ultimoQuadro = out;
+    }
+    ultimoQuadroAt = Date.now();
+
     try {
       encoder.encode(out, { keyFrame: wantKeyframe });
       if (wantKeyframe) {
@@ -1015,6 +1045,47 @@ export function createBroadcaster({
 
     out.close();
     return true;
+  }
+
+  function emitirQuadroEstatico(forcarKeyframe = false) {
+    if (!running || !ultimoQuadro || !encoder || encoder.state !== 'configured') return;
+    if (ws?.readyState !== WebSocket.OPEN) return;
+
+    const agora = performance.now();
+    const timestamp = agora * 1000;
+    const isKey = forcarKeyframe || wantKeyframe;
+
+    try {
+      const vf =
+        typeof ultimoQuadro.clone === 'function'
+          ? ultimoQuadro.clone()
+          : new VideoFrame(ultimoQuadro, { timestamp });
+      encoder.encode(vf, { keyFrame: isKey });
+      if (typeof vf.close === 'function') vf.close();
+      if (isKey) {
+        lastKeyframeAt = Date.now();
+        wantKeyframe = false;
+      }
+      ultimoQuadroAt = Date.now();
+    } catch (err) {
+      console.warn('[static frame encode]', err);
+    }
+  }
+
+  function startIdleHeartbeat() {
+    stopIdleHeartbeat();
+    idleTimer = setInterval(() => {
+      if (!running) return;
+      const agora = Date.now();
+      if (ultimoQuadro && agora - ultimoQuadroAt >= 1000) {
+        emitirQuadroEstatico(wantKeyframe);
+      }
+    }, 1000);
+  }
+
+  function stopIdleHeartbeat() {
+    clearInterval(idleTimer);
+    idleTimer = null;
   }
 
   function adaptVideoQuality() {
@@ -1284,8 +1355,12 @@ export function createBroadcaster({
           }
         }
         // Alguém entrou na sala e precisa de um ponto de partida.
-        else if (msg.type === 'need-keyframe') wantKeyframe = true;
-        else if (msg.type === 'relay-congestion') relayCongestion = true;
+        else if (msg.type === 'need-keyframe') {
+          wantKeyframe = true;
+          if (ultimoQuadro && Date.now() - ultimoQuadroAt > 200) {
+            emitirQuadroEstatico(true);
+          }
+        } else if (msg.type === 'relay-congestion') relayCongestion = true;
         else if (msg.type === 'native-audio-ready') {
           nativeAudio = true;
           onAviso?.('Áudio isolado do Firefox ligado.');
@@ -1367,8 +1442,12 @@ export function createBroadcaster({
               } else {
                 viewers = Number.isInteger(msg.viewers) ? msg.viewers : 0;
               }
-            } else if (msg.type === 'need-keyframe') wantKeyframe = true;
-            else if (msg.type === 'relay-congestion') relayCongestion = true;
+            } else if (msg.type === 'need-keyframe') {
+              wantKeyframe = true;
+              if (ultimoQuadro && Date.now() - ultimoQuadroAt > 200) {
+                emitirQuadroEstatico(true);
+              }
+            } else if (msg.type === 'relay-congestion') relayCongestion = true;
             else if (msg.type === 'native-audio-ready') {
               nativeAudio = true;
               onAviso?.('Áudio isolado do Firefox ligado.');
@@ -1541,6 +1620,7 @@ export function createBroadcaster({
 
   function cleanup() {
     stopAntiSleep();
+    stopIdleHeartbeat();
     frameClock?.postMessage({ type: 'stop' });
     frameClock?.terminate();
     frameClock = null;
@@ -1550,6 +1630,14 @@ export function createBroadcaster({
     video = null;
     stage = null;
     stageCtx = null;
+    if (typeof ultimoQuadro?.close === 'function') {
+      try {
+        ultimoQuadro.close();
+      } catch {
+        /* ignora */
+      }
+    }
+    ultimoQuadro = null;
   }
 
   function stop(reason) {
@@ -1562,6 +1650,15 @@ export function createBroadcaster({
     reconnectTimer = null;
     reconnectAttempts = 0;
     stopKeepalive();
+    stopIdleHeartbeat();
+    if (typeof ultimoQuadro?.close === 'function') {
+      try {
+        ultimoQuadro.close();
+      } catch {
+        /* ignora */
+      }
+    }
+    ultimoQuadro = null;
 
     clearInterval(statsTimer);
     statsTimer = null;

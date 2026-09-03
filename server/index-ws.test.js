@@ -75,6 +75,8 @@ function ate(ws, predicado, oQue = 'a mensagem esperada') {
 }
 
 const doTipo = (tipo) => (msg) => msg.type === tipo;
+const comoControle = (room, uid = 'mesma') =>
+  conectar(tokenDe(room.id, 'broadcaster', uid), '/ws', { modo: 'controle' });
 
 /** Espera um quadro binário chegar, ignorando o texto que vier no meio. */
 function ateBinario(ws) {
@@ -279,9 +281,6 @@ describe('duas fontes', () => {
 });
 
 describe('aba de captura', () => {
-  const comoControle = (room, uid = 'mesma') =>
-    conectar(tokenDe(room.id, 'broadcaster', uid), '/ws', { modo: 'controle' });
-
   it('conecta sem ocupar slot e sem receber um', async () => {
     const room = novaSala();
     const espectador = await conectar(tokenDe(room.id, 'viewer'));
@@ -498,5 +497,38 @@ describe('espectador', () => {
     expect(
       await ate(outro, (m) => m.type === 'state' && m.viewers === 1, 'a sala com um só'),
     ).toBeTruthy();
+  });
+
+  it('ao desconectar o viewer da atividade, a transmissão da pessoa é derrubada na hora e a aba de controle recebe close-request', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    naActivity.close();
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
+  });
+
+  it('ao chamar a rota /api/rooms/leave, as transmissões e abas de controle da pessoa são encerradas imediatamente', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    const res = await fetch(`http://127.0.0.1:${server.address().port}/api/rooms/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenDe(room.id, 'viewer', 'u1') }),
+    });
+    expect(res.status).toBe(200);
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
   });
 });

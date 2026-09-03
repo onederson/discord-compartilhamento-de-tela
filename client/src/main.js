@@ -1399,6 +1399,20 @@ let lobbyTimer = null;
  */
 function limparSala() {
   stopMyBroadcast();
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: 'close-controls-broadcast' }));
+    } catch {
+      /* ignora erro */
+    }
+  }
+  try {
+    const bc = new BroadcastChannel('discord-screenshare-focus');
+    bc.postMessage({ type: 'fechar-todas' });
+    bc.close();
+  } catch {
+    /* BroadcastChannel indisponível */
+  }
 
   closeAllStreams();
   available.clear();
@@ -1887,10 +1901,16 @@ function connect() {
       renderGrid();
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
+      const anterior = info?.config;
+      const configMudou = !anterior || JSON.stringify(anterior) !== JSON.stringify(msg.config);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        openStream(msg.slot, info?.userId ?? msg.slot);
-        startStream(msg.slot, msg.config);
+        if (!streams.has(msg.slot)) {
+          openStream(msg.slot, info?.userId ?? msg.slot);
+          startStream(msg.slot, msg.config);
+        } else if (configMudou) {
+          startStream(msg.slot, msg.config);
+        }
       }
     } else if (msg.type === 'audio-config') {
       // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
@@ -2341,9 +2361,12 @@ function stopMyBroadcast(fonte = null) {
     myBroadcast?.stop();
     myBroadcast = null;
   }
-  if (participants.some((p) => p.broadcasting && p.id === session?.user?.id)) {
-    // Sem fonte o servidor derruba tudo — que é o certo para sair da sala.
-    ws?.send(JSON.stringify({ type: 'stop-broadcast', ...(fonte ? { fonte } : {}) }));
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: 'stop-broadcast', ...(fonte ? { fonte } : {}) }));
+    } catch {
+      /* ignora erro ao enviar */
+    }
   }
 }
 
@@ -2619,3 +2642,56 @@ $('probe').addEventListener('click', async () => {
     toast(`Bloqueado (${err.name}): ${err.message}`, true);
   }
 });
+
+// Encerramento imediato de segurança e privacidade ao fechar a atividade ou sair da chamada
+function aoSairDaAtividade() {
+  try {
+    myBroadcast?.stop();
+    myBroadcast = null;
+  } catch {
+    /* ignora erro ao parar localmente */
+  }
+
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(JSON.stringify({ type: 'stop-broadcast' }));
+      ws.send(JSON.stringify({ type: 'close-controls-broadcast' }));
+    } catch {
+      /* ignora erro ao enviar */
+    }
+  }
+
+  try {
+    const bc = new BroadcastChannel('discord-screenshare-focus');
+    bc.postMessage({ type: 'fechar-todas' });
+    bc.close();
+  } catch {
+    /* BroadcastChannel indisponível */
+  }
+
+  if (roomInfo?.id) {
+    try {
+      const url = `${P}/api/rooms/leave`;
+      const body = JSON.stringify({
+        roomId: roomInfo.id,
+        token: roomTokens?.viewer || session?.token,
+        identity: session?.identity,
+      });
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
+      } else {
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch {
+      /* ignora erro de envio de emergência */
+    }
+  }
+}
+
+window.addEventListener('beforeunload', aoSairDaAtividade);
+window.addEventListener('pagehide', aoSairDaAtividade);
