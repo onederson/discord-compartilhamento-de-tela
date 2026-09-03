@@ -186,6 +186,15 @@ export function toControls(room, userId, obj) {
   return entregues;
 }
 
+/** Conta quantas abas de controle uma pessoa tem abertas. */
+export function countControls(room, userId) {
+  let count = 0;
+  for (const ws of room.controles) {
+    if (ws.__controlOf === userId) count++;
+  }
+  return count;
+}
+
 // ------------------------------------------------------------------- senha
 
 function hashPassword(password, salt = crypto.randomBytes(16)) {
@@ -482,7 +491,7 @@ function watchersOf(room, slot) {
   }));
 }
 
-function roomState(room) {
+export function roomState(room) {
   // Uma pessoa pode ter a sala aberta em mais de uma aba; agrupamos por id
   // para não aparecer duplicada na lista.
   const byId = new Map();
@@ -514,14 +523,19 @@ function roomState(room) {
 
   participants.sort((a, b) => Number(b.broadcasting) - Number(a.broadcasting));
 
-  // Quem tem aba de captura aberta. É o que permite à atividade saber se pode
-  // falar com ela em vez de abrir outra — antes isso era deduzido do que estava
-  // no ar, e uma aba ainda parada não aparecia em lugar nenhum.
-  const abas = [...new Set([...room.controles].map((ws) => ws.__controlOf))];
+  // Quem tem aba de captura aberta e quantas estão conectadas.
+  // Mantém abas como lista para compatibilidade e adiciona abasCount com o total de cada um.
+  const abasCount = {};
+  for (const ws of room.controles) {
+    const uid = ws.__controlOf;
+    if (uid) abasCount[uid] = (abasCount[uid] || 0) + 1;
+  }
+  const abas = Object.keys(abasCount);
 
   return {
     type: 'state',
     abas,
+    abasCount,
     room: { id: room.id, name: room.name, ownerId: room.ownerId, locked: Boolean(room.password) },
     broadcasting: room.broadcasters.size > 0,
     viewers: room.viewers.size,

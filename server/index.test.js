@@ -131,6 +131,15 @@ describe('cabeçalhos', () => {
     expect(html).toContain('discord-screenshare-focus');
   });
 
+  it('serve a página auxiliar /focar customizada para câmera', async () => {
+    const resposta = await get('/focar?fonte=camera');
+
+    expect(resposta.status).toBe(200);
+    const html = await resposta.text();
+    expect(html).toContain('Ligando a câmera');
+    expect(html).toContain('discord-screen-captura');
+  });
+
   it('serve os termos sem a extensão no endereço', async () => {
     expect((await get('/termos')).status).toBe(200);
   });

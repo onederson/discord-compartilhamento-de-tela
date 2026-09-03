@@ -61,6 +61,7 @@ const watching = new Set(); // slots que eu pedi para assistir
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
 const abas = new Set();
+let abasCount = {};
 
 let sdk = null;
 let session = null;
@@ -71,37 +72,17 @@ let reconnectDelay = 1000;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
-// Volume de tudo que chega, de 0 a 1. Vale para todas as telas e sobrevive a
-// trocar de sala: é preferência de quem assiste, não estado de uma transmissão.
+// Volume de tudo que chega, de 0 a 2 (0% a 200%). Vale para todas as telas e
+// sobrevive a trocar de sala: é preferência de quem assiste, com ganho extra.
 // Zero é o mudo — um número só, em vez de dois estados que precisam concordar.
-let volume = Math.min(1, Math.max(0, Number(read('volume') ?? 1)));
+let volume = Math.min(2, Math.max(0, Number(read('volume') ?? 1)));
 
-/**
- * Volume de cada pessoa, separado do volume geral.
- *
- * Como no Discord: o cursor do dock é o volume de tudo, e cada transmissão tem
- * o seu, guardado por pessoa e não por sessão — quem sempre chega alto demais
- * continua ajustado amanhã. O que sai no alto-falante é o produto dos dois.
- */
-const volumePessoa = lerVolumes();
-
-function lerVolumes() {
-  try {
-    return new Map(Object.entries(JSON.parse(read('volumePessoa') ?? '{}')));
-  } catch {
-    return new Map();
-  }
-}
-
-const gravarVolumes = () => store('volumePessoa', JSON.stringify(Object.fromEntries(volumePessoa)));
-
-const volumeEfetivo = (userId) => volume * (volumePessoa.get(userId) ?? 1);
-
-/** Reaplica o volume de um stream depois de qualquer um dos dois mudar. */
+/** Reaplica o volume de um stream depois de mudar. */
 function aplicarVolume(slot) {
   const s = streams.get(slot);
-  s?.audio?.setVolume(volumeEfetivo(s.userId));
+  s?.audio?.setVolume(volume);
 }
+
 // Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
 // 100%, ignorando o ajuste que a pessoa tinha feito.
 let volumeAntes = volume || 1;
@@ -865,8 +846,8 @@ function openTileMenu(x, y, slot, name) {
   }, 0);
 }
 
-/** Cursor de volume de uma pessoa, no menu do botão direito. */
-function buildMenuVolume(userId, name, slot) {
+/** Cursor de volume no menu do botão direito, sincronizado com o volume geral. */
+function buildMenuVolume(_userId, name, _slot) {
   const bloco = document.createElement('div');
   bloco.className = 'menu-volume';
 
@@ -882,28 +863,19 @@ function buildMenuVolume(userId, name, slot) {
   barra.type = 'range';
   barra.min = '0';
   barra.max = '200';
-  barra.step = '5';
+  barra.step = '1';
   barra.setAttribute('aria-label', `Volume de ${name}`);
 
   const valor = document.createElement('span');
   valor.className = 'menu-volume-valor';
 
-  const mostrar = () => {
-    valor.textContent = `${barra.value}%`;
-  };
-
-  barra.value = String(Math.round((volumePessoa.get(userId) ?? 1) * 100));
-  mostrar();
+  const pct = Math.round(volume * 100);
+  barra.value = String(pct);
+  valor.textContent = `${pct}%`;
 
   barra.addEventListener('input', () => {
     const nivel = Number(barra.value) / 100;
-    // 100% é o padrão: não guardar significa "nunca foi mexido", e é o que
-    // mantém o armazenamento pequeno depois de muita gente passar pela sala.
-    if (nivel === 1) volumePessoa.delete(userId);
-    else volumePessoa.set(userId, nivel);
-    gravarVolumes();
-    aplicarVolume(slot);
-    mostrar();
+    setVolume(nivel);
   });
 
   linha.append(barra, valor);
@@ -1097,7 +1069,7 @@ function startAudio(slot, config) {
   if (!s) return;
 
   s.audio?.stop();
-  s.audio = createAudio({ onError: (m) => toast(m, true), volume: volumeEfetivo(s.userId) });
+  s.audio = createAudio({ onError: (m) => toast(m, true), volume });
   if (!s.audio.start(config)) {
     s.audio = null;
     return;
@@ -1877,6 +1849,7 @@ function connect() {
       participants = msg.participants ?? [];
       abas.clear();
       for (const uid of msg.abas ?? []) abas.add(uid);
+      abasCount = msg.abasCount ?? {};
 
       lastRoomState = msg.room ?? null;
 
@@ -1994,15 +1967,21 @@ function minhasFontes() {
 }
 
 /**
+ * Quantas abas de captura minhas estão conectadas segundo o servidor?
+ */
+function quantidadeAbas() {
+  const meu = session?.user?.id;
+  if (!meu) return 0;
+  return abasCount[meu] ?? (abas.has(meu) ? 1 : 0);
+}
+
+/**
  * Existe uma aba de captura minha conectada?
  *
- * Quem responde é o servidor, pela lista `abas` do estado. Antes isto era
- * deduzido do que estava no ar, e errava justamente no caso que mais importa:
- * a aba recém-aberta, ainda sem transmitir, ficava invisível — e um novo clique
- * abria outra em cima dela.
+ * Quem responde é o servidor, pela lista `abas` e contagem `abasCount`.
  */
 function abaAberta() {
-  return abas.has(session?.user?.id);
+  return quantidadeAbas() > 0;
 }
 
 /**
@@ -2147,34 +2126,85 @@ function opcoesDaFonte() {
 /** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
 const JANELA_CAPTURA = 'discord-screen-captura';
 
-function ligarFonte(fonte) {
-  if (abaAberta()) return trazerAba(fonte);
+/**
+ * Gerencia a janela de captura única:
+ * - Se houver mais de uma janela aberta: fecha todas e abre uma nova limpa.
+ * - Se houver exatamente uma janela aberta e funcional: reutiliza-a e traz para a frente.
+ * - Se não houver nenhuma janela aberta: abre uma nova janela de captura.
+ */
+function gerenciarAba(fonte, { acao = null } = {}) {
+  const qtd = quantidadeAbas();
+
+  if (qtd > 1) {
+    fecharTodasAbasEIniciar(fonte);
+    return;
+  }
+
+  if (abaAberta()) {
+    trazerAba(fonte, { acao });
+    return;
+  }
+
   abrirCaptura(fonte);
 }
 
+function fecharTodasAbasEIniciar(fonte) {
+  ws?.send(JSON.stringify({ type: 'close-controls-broadcast' }));
+  try {
+    const bc = new BroadcastChannel('discord-screenshare-focus');
+    bc.postMessage({ type: 'fechar-todas' });
+    bc.close();
+  } catch {
+    /* BroadcastChannel pode não estar disponível */
+  }
+
+  const meu = session?.user?.id;
+  if (meu) {
+    abasCount[meu] = 0;
+    abas.delete(meu);
+  }
+
+  toast('Fechando transmissões antigas e abrindo uma nova janela…');
+  abrirCaptura(fonte);
+}
+
+function ligarFonte(fonte) {
+  gerenciarAba(fonte);
+}
+
 /**
- * A aba de captura já existe: leva a pessoa até ela.
- *
- * O pedido pelo WebSocket sozinho não resolvia. Ele chega, a aba atende — mas
- * em segundo plano, onde ninguém vê, e uma aba não consegue se trazer para a
- * frente. Avisar por toast que ela existe deixava a pessoa procurando entre as
- * janelas qual era.
+ * A aba de captura já existe: leva a pessoa até ela e ativa a fonte desejada.
  */
-function trazerAba(fonte) {
-  // Dentro do Discord a aba foi parar no navegador do sistema, que é outro
-  // processo: daqui não há como focá-la. Abrir de novo é o que existe, e a
-  // fonte vai na URL, então a aba nova já nasce no que se pediu. Se a antiga
-  // continuar aberta, ficam duas — é o preço da fronteira entre os processos.
-  if (inDiscord) return abrirLink(fonte);
+function trazerAba(fonte, { acao = null } = {}) {
+  if (acao === 'trocar-tela') {
+    ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
+  } else {
+    ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+  }
+
+  const rotulo =
+    acao === 'trocar-tela'
+      ? 'trocar a tela'
+      : fonte === 'camera'
+        ? 'ligar a câmera'
+        : 'compartilhar a tela';
+
+  toast(`Trazendo o navegador para a frente para ${rotulo}…`);
+
+  const origem = origemDoSite();
+  if (inDiscord && origem) {
+    const url = new URL(`${origem}/focar`);
+    if (acao) url.searchParams.set('acao', acao);
+    if (fonte) url.searchParams.set('fonte', fonte);
+    sdk?.commands?.openExternalLink({ url: url.toString() })?.catch(() => {});
+    return;
+  }
 
   // Fora do Discord a aba é nossa, e o nome fixo a encontra. String vazia de
-  // propósito: passar a URL faria o navegador *navegar* nela, e navegar é
-  // recarregar — mataria a transmissão que estiver no ar ali dentro.
+  // propósito: passar a URL faria o navegador navegar nela e recarregar.
   const aba = window.open('', JANELA_CAPTURA);
   if (!aba) return abrirLink(fonte);
 
-  // `window.open('')` num nome que não existe cria uma aba em branco em vez de
-  // achar alguma. Aí ela precisa ser levada para o lugar certo.
   let emBranco = false;
   try {
     emBranco = aba.location.href === 'about:blank';
@@ -2188,9 +2218,17 @@ function trazerAba(fonte) {
   }
 
   aba.focus();
-  // A URL não mudou, então o pedido tem de ir por fora dela. As opções vão
-  // junto: a aba pode estar aberta desde antes da última mexida na engrenagem.
-  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+  try {
+    const bc = new BroadcastChannel('discord-screenshare-focus');
+    bc.postMessage({
+      type: acao === 'trocar-tela' ? 'trocar-tela' : 'focar',
+      fonte,
+      acao,
+    });
+    bc.close();
+  } catch {
+    /* BroadcastChannel pode não estar disponível */
+  }
 }
 
 async function abrirCaptura(fonte) {
@@ -2348,18 +2386,7 @@ $('changeScreen')?.addEventListener('click', async () => {
     return;
   }
 
-  if (minhasFontes().has('tela') || abaAberta()) {
-    ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
-
-    const origem = origemDoSite();
-    if (inDiscord && origem) {
-      sdk?.commands?.openExternalLink({ url: `${origem}/focar` })?.catch(() => {});
-    }
-    toast('Trazendo o navegador para a frente para trocar a tela…');
-    return;
-  }
-
-  ligarFonte('tela');
+  gerenciarAba('tela', { acao: 'trocar-tela' });
 });
 
 $('camera').addEventListener('click', () => {
@@ -2377,22 +2404,34 @@ $('camera').addEventListener('click', () => {
 /** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
   const pct = Math.round(volume * 100);
-  $('volume').value = String(pct);
-  $('volumeVal').textContent = pct + '%';
+  const volumeEl = $('volume');
+  if (volumeEl) volumeEl.value = String(pct);
+  const volumeValEl = $('volumeVal');
+  if (volumeValEl) volumeValEl.textContent = pct + '%';
 
   const rotulo = volume === 0 ? 'Ligar o som' : 'Silenciar';
-  $('mute').setAttribute('aria-label', rotulo);
-  $('mute').title = rotulo;
-  $('mute').classList.toggle('on', volume === 0);
-  $('muteOn').hidden = volume === 0;
-  $('muteOff').hidden = volume !== 0;
+  const muteEl = $('mute');
+  if (muteEl) {
+    muteEl.setAttribute('aria-label', rotulo);
+    muteEl.title = rotulo;
+    muteEl.classList.toggle('on', volume === 0);
+  }
+  const muteOnEl = $('muteOn');
+  if (muteOnEl) muteOnEl.hidden = volume === 0;
+  const muteOffEl = $('muteOff');
+  if (muteOffEl) muteOffEl.hidden = volume !== 0;
+
+  for (const b of document.querySelectorAll('.menu-volume input[type="range"]')) {
+    b.value = String(pct);
+    const v = b.closest('.menu-volume-linha')?.querySelector('.menu-volume-valor');
+    if (v) v.textContent = `${pct}%`;
+  }
 }
 
 function setVolume(valor) {
-  volume = Math.min(1, Math.max(0, valor));
+  volume = Math.min(2, Math.max(0, valor));
   if (volume > 0) volumeAntes = volume;
   store('volume', String(volume));
-  // O geral mudou: cada stream recalcula, porque o dele é o produto dos dois.
   for (const slot of streams.keys()) aplicarVolume(slot);
   renderVolume();
 }

@@ -320,6 +320,19 @@ describe('aba de captura', () => {
     });
   });
 
+  it('recebe o pedido de fechar abas de controle vindo da atividade e repassa close-request', async () => {
+    const room = novaSala();
+    const aba = await comoControle(room);
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'mesma'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    naActivity.send(JSON.stringify({ type: 'close-controls-broadcast' }));
+
+    expect(await ate(aba, doTipo('close-request'), 'o pedido de fechamento')).toMatchObject({
+      type: 'close-request',
+    });
+  });
+
   it('ignora um pedido com fonte que não existe', async () => {
     const room = novaSala();
     const aba = await comoControle(room);

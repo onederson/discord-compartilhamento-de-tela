@@ -717,13 +717,28 @@ function discordAuthorizeUrl(state = null) {
   return url;
 }
 
-app.get('/focar', (_req, res) => {
+app.get('/focar', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
+  const fonteParam =
+    req.query.fonte === 'camera' || req.query.fonte === 'tela' ? req.query.fonte : null;
+  const acaoParam =
+    req.query.acao === 'trocar-tela'
+      ? 'trocar-tela'
+      : fonteParam
+        ? `focar-${fonteParam}`
+        : 'trocar-tela';
+  const tituloInicial =
+    acaoParam === 'trocar-tela'
+      ? 'Trocando de tela…'
+      : fonteParam === 'camera'
+        ? 'Ligando a câmera…'
+        : 'Compartilhando a tela…';
+
   res.send(`<!doctype html>
 <html lang="pt-BR">
 <head>
   <meta charset="utf-8">
-  <title>Trocando de tela…</title>
+  <title>${tituloInicial}</title>
   <style>
     body {
       margin: 0;
@@ -760,11 +775,15 @@ app.get('/focar', (_req, res) => {
 </head>
 <body>
   <div class="card">
-    <h2>Trocando de tela…</h2>
+    <h2>${tituloInicial}</h2>
     <p>O navegador foi trazido para a frente! Se esta guia não fechar sozinha, clique abaixo para ir para a transmissão.</p>
     <button onclick="focarEFaixar()">Ir para a transmissão</button>
   </div>
   <script>
+    const params = new URLSearchParams(location.search);
+    const fonte = params.get('fonte');
+    const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
+
     function focarEFaixar() {
       try {
         const w = window.open('', 'discord-screen-captura');
@@ -772,7 +791,7 @@ app.get('/focar', (_req, res) => {
       } catch {}
       try {
         const bc = new BroadcastChannel('discord-screenshare-focus');
-        bc.postMessage({ type: 'trocar-tela' });
+        bc.postMessage({ type: acao === 'trocar-tela' ? 'trocar-tela' : 'focar', fonte, acao });
         bc.close();
       } catch {}
       try {
@@ -1301,6 +1320,21 @@ function handleViewer(ws, room, auth) {
     if (msg.type === 'change-screen-broadcast') {
       const n = R.toControls(room, auth.uid, { type: 'change-screen-request' });
       if (n) logDev(`[room ${room.id}] ${auth.name} pediu para trocar a tela na aba de captura`);
+      return;
+    }
+
+    // Pedido para fechar todas as abas de controle antigas ou duplicadas.
+    if (msg.type === 'close-controls-broadcast') {
+      const n = R.toControls(room, auth.uid, { type: 'close-request' });
+      const alvos = R.broadcastersOf(room, auth.uid);
+      for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
+      for (const wsControl of [...room.controles]) {
+        if (wsControl.__controlOf === auth.uid) {
+          R.detachControl(room, wsControl);
+        }
+      }
+      R.broadcastState(room);
+      if (n) logDev(`[room ${room.id}] ${auth.name} fechou ${n} aba(s) de controle duplicada(s)`);
       return;
     }
 
