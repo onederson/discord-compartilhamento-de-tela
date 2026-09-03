@@ -170,7 +170,7 @@ function falhar(titulo, msg) {
   el.className = 'status error';
 }
 
-function fecharAba() {
+function fecharAba(motivo) {
   for (const f of FONTES) paineis[f]?.parar();
   if (controle) {
     clearTimeout(religar);
@@ -184,7 +184,8 @@ function fecharAba() {
   }
   falhar(
     'Janela encerrada.',
-    'Esta janela foi fechada porque uma nova transmissão foi iniciada no Discord.',
+    motivo ||
+      'Esta janela foi fechada porque a transmissão foi encerrada ou você saiu da atividade no Discord.',
   );
   try {
     window.open('', '_self');
@@ -358,7 +359,7 @@ function ligarControle() {
         }
       }
     } else if (msg.type === 'close-request') {
-      fecharAba();
+      fecharAba(msg.motivo);
     } else if (msg.type === 'room-gone') {
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.
