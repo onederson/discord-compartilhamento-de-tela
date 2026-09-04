@@ -2153,6 +2153,14 @@ const JANELA_CAPTURA = 'discord-screen-captura';
  * - Se não houver nenhuma janela aberta: abre uma nova janela de captura.
  */
 function gerenciarAba(fonte, { acao = null } = {}) {
+  // Ao trocar de tela, recriar a janela garante que o navegador venha para a frente
+  // com a nova aba ativa e o seletor nativo aberto de imediato, sem ficar preso
+  // atrás de outras abas ou exigir cliques adicionais.
+  if (acao === 'trocar-tela') {
+    fecharTodasAbasEIniciar(fonte, { motivo: 'trocar-tela' });
+    return;
+  }
+
   const qtd = quantidadeAbas();
 
   if (qtd > 1) {
@@ -2168,7 +2176,7 @@ function gerenciarAba(fonte, { acao = null } = {}) {
   abrirCaptura(fonte);
 }
 
-function fecharTodasAbasEIniciar(fonte) {
+function fecharTodasAbasEIniciar(fonte, { motivo = null } = {}) {
   ws?.send(JSON.stringify({ type: 'close-controls-broadcast' }));
   try {
     const bc = new BroadcastChannel('discord-screenshare-focus');
@@ -2184,7 +2192,11 @@ function fecharTodasAbasEIniciar(fonte) {
     abas.delete(meu);
   }
 
-  toast('Fechando transmissões antigas e abrindo uma nova janela…');
+  if (motivo === 'trocar-tela') {
+    toast('Trazendo o navegador para a frente para trocar a tela…');
+  } else {
+    toast('Fechando transmissões antigas e abrindo uma nova janela…');
+  }
   abrirCaptura(fonte);
 }
 
