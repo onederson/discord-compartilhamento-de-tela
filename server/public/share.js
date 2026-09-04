@@ -140,10 +140,7 @@ try {
       chamar('tela');
       const painel = paineis.tela;
       if (painel && !painel.ativo() && !painel.indisponivel()) {
-        painel.setStatus(
-          'Clique no botão "Escolher janela ou tela" acima para iniciar a transmissão.',
-          'aviso',
-        );
+        painel.ligar?.()?.catch?.(() => {});
       }
       return;
     }
@@ -268,7 +265,11 @@ function atenderPedido(fonte, novas) {
   if (!painel || painel.ativo() || painel.indisponivel()) return;
 
   chamar(fonte);
-  if (fonte === 'camera') painel.verCamera();
+  if (fonte === 'camera') {
+    painel.verCamera();
+  } else if (fonte === 'tela') {
+    painel.ligar?.()?.catch?.(() => {});
+  }
 }
 
 // --------------------------------------------------------------- controle
@@ -305,15 +306,7 @@ function ligarControle() {
       window.focus();
       atenderPedido(msg.fonte, msg.opcoes);
 
-      if (msg.fonte === 'tela') {
-        const painel = paineis.tela;
-        if (painel && !painel.ativo() && !painel.indisponivel()) {
-          painel.setStatus(
-            'Clique no botão "Escolher janela ou tela" acima para iniciar a transmissão.',
-            'aviso',
-          );
-        }
-      } else if (msg.fonte === 'camera') {
+      if (msg.fonte === 'camera') {
         const painel = paineis.camera;
         if (painel && !painel.ativo() && !painel.indisponivel()) {
           painel.setStatus(
@@ -409,6 +402,7 @@ function criarPainel(fonte) {
   const camera = fonte === 'camera';
 
   let broadcaster = null;
+  let ligando = false;
 
   /**
    * Prévia local: o que a fonte mostra, antes de qualquer transmissão.
@@ -575,7 +569,8 @@ function criarPainel(fonte) {
   async function ligar() {
     // Pedido repetido não reabre nada: a segunda conexão seria recusada pelo
     // servidor, e o seletor de tela abriria por cima do que já está no ar.
-    if (broadcaster) return;
+    if (broadcaster || ligando) return;
+    ligando = true;
 
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -709,8 +704,16 @@ function criarPainel(fonte) {
       // quase sempre cancelar o seletor; na câmera é a permissão negada.
       const negado = camera
         ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
-        : 'Você cancelou a seleção de tela.';
-      setStatus(err.name === 'NotAllowedError' ? negado : err.message, 'error');
+        : 'Você cancelou a seleção de tela. Clique no botão acima para escolher novamente.';
+      const msg =
+        err.name === 'NotAllowedError'
+          ? negado
+          : err.name === 'InvalidStateError'
+            ? 'O navegador exige um clique para abrir a tela. Clique no botão "Escolher janela ou tela" acima.'
+            : err.message;
+      setStatus(msg, err.name === 'NotAllowedError' ? 'aviso' : 'error');
+    } finally {
+      ligando = false;
     }
   }
 
