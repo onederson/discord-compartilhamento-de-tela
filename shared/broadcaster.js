@@ -291,6 +291,7 @@ export function createBroadcaster({
   let lastSentAudioConfig = null;
   let wakeLock = null;
   let antiSleepAudioCtx = null;
+  let trocandoTela = false;
 
   async function startAntiSleep() {
     try {
@@ -1530,53 +1531,59 @@ export function createBroadcaster({
    * imagem mudar, sem piscar nem reconectar.
    */
   async function changeScreen() {
-    // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
-    const fresh = await pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
+    if (trocandoTela) return stream;
+    trocandoTela = true;
+    try {
+      // Precisa vir do gesto do usuário, como qualquer getDisplayMedia.
+      const fresh = await pedirDisplayMedia(opcoesCaptura(), { comSom: audio });
 
-    const previous = stream;
-    const previousReader = reader;
+      const previous = stream;
+      const previousReader = reader;
 
-    stream = fresh;
-    const track = fresh.getVideoTracks()[0];
-    displaySurface = track.getSettings?.().displaySurface ?? null;
-    await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
-    track.contentHint = 'motion';
-    track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
+      stream = fresh;
+      const track = fresh.getVideoTracks()[0];
+      displaySurface = track.getSettings?.().displaySurface ?? null;
+      await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
+      track.contentHint = 'motion';
+      track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
 
-    // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
-    // encoder e a fila estoura.
-    reader = null;
-    await previousReader?.cancel().catch(() => {});
-    previous?.getTracks().forEach((t) => t.stop());
+      // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
+      // encoder e a fila estoura.
+      reader = null;
+      await previousReader?.cancel().catch(() => {});
+      previous?.getTracks().forEach((t) => t.stop());
 
-    // Zera o tamanho conhecido: a tela nova quase certamente tem outro, e é o
-    // syncSize que reconfigura o encoder.
-    srcW = 0;
-    srcH = 0;
-    wantKeyframe = true;
+      // Zera o tamanho conhecido: a tela nova quase certamente tem outro, e é o
+      // syncSize que reconfigura o encoder.
+      srcW = 0;
+      srcH = 0;
+      wantKeyframe = true;
 
-    if (video) {
-      video.srcObject = fresh;
-      video.play().catch(() => {});
-    } else {
-      pumpDirect(track);
-    }
-
-    // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
-    await audioReader?.cancel().catch(() => {});
-    audioReader = null;
-    if (audioEncoder?.state === 'configured') {
-      try {
-        audioEncoder.close();
-      } catch {
-        // O navegador pode ter fechado o encoder junto com a faixa antiga.
+      if (video) {
+        video.srcObject = fresh;
+        video.play().catch(() => {});
+      } else {
+        pumpDirect(track);
       }
-    }
-    audioEncoder = null;
-    const novoAudio = prepararSom(track, fresh);
-    if (novoAudio) pumpAudio(novoAudio);
 
-    return fresh;
+      // A tela nova traz a própria faixa de som; a antiga morreu com o stream.
+      await audioReader?.cancel().catch(() => {});
+      audioReader = null;
+      if (audioEncoder?.state === 'configured') {
+        try {
+          audioEncoder.close();
+        } catch {
+          // O navegador pode ter fechado o encoder junto com a faixa antiga.
+        }
+      }
+      audioEncoder = null;
+      const novoAudio = prepararSom(track, fresh);
+      if (novoAudio) pumpAudio(novoAudio);
+
+      return fresh;
+    } finally {
+      trocandoTela = false;
+    }
   }
 
   /** Ajusta qualidade e taxa de quadros com a transmissão no ar. */

@@ -813,24 +813,39 @@ app.get('/focar', (req, res) => {
     const fonte = params.get('fonte');
     const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
 
+    let disparado = false;
+
     function focarEFaixar() {
+      if (disparado) return;
+      disparado = true;
+
+      let focou = false;
       try {
         const w = window.open('', 'discord-screen-captura');
-        if (w && w !== window) w.focus();
+        if (w && w !== window) {
+          w.focus();
+          focou = true;
+        }
       } catch {}
+
       try {
         const bc = new BroadcastChannel('discord-screenshare-focus');
         bc.postMessage({ type: acao === 'trocar-tela' ? 'trocar-tela' : 'focar', fonte, acao });
         bc.close();
       } catch {}
-      try {
-        window.open('', '_self');
-        window.close();
-      } catch {}
+
+      // Aguarda o navegador efetivar o foco na aba discord-screen-captura
+      // antes de fechar esta guia. Fechamento instantâneo síncrono faz o
+      // Chrome restaurar a aba anterior (ex: Google).
+      setTimeout(() => {
+        try {
+          window.open('', '_self');
+          window.close();
+        } catch {}
+      }, 350);
     }
 
     focarEFaixar();
-    setTimeout(focarEFaixar, 200);
   </script>
 </body>
 </html>`);

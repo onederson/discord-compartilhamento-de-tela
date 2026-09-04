@@ -768,6 +768,8 @@ function criarPainel(fonte) {
     });
   }
 
+  let ultimaTrocaTela = 0;
+
   return {
     ligar,
     escolher,
@@ -782,7 +784,16 @@ function criarPainel(fonte) {
       pararPrevia();
     },
     trocarSom: () => broadcaster?.trocarSom(),
-    trocarTela: () => broadcaster?.changeScreen(),
+    trocarTela: () => {
+      const agora = Date.now();
+      if (agora - ultimaTrocaTela < 2500) return null;
+      ultimaTrocaTela = agora;
+      return broadcaster?.changeScreen()?.finally(() => {
+        setTimeout(() => {
+          if (ultimaTrocaTela === agora) ultimaTrocaTela = 0;
+        }, 500);
+      });
+    },
   };
 }
 
