@@ -72,20 +72,34 @@ let reconnectDelay = 1000;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
-// Volume de tudo que chega, de 0 a 2 (0% a 200%). Vale para todas as telas e
-// sobrevive a trocar de sala: é preferência de quem assiste, com ganho extra.
-// Zero é o mudo — um número só, em vez de dois estados que precisam concordar.
-let volume = Math.min(2, Math.max(0, Number(read('volume') ?? 1)));
+// Volume individual por pessoa (userId), de 0 a 2 (0% a 200%).
+// Sobrevive a trocar de sala e recarregar a página.
+let volumes = {};
+try {
+  volumes = JSON.parse(read('volumes') || '{}');
+} catch {
+  volumes = {};
+}
+let volumesAntes = {};
+
+function getVolume(userId) {
+  return volumes[userId] ?? 1;
+}
+
+function getVolumeAntes(userId) {
+  return volumesAntes[userId] ?? 1;
+}
+
+function getPrincipalSlot() {
+  if (activeSlot !== null) return activeSlot;
+  return streams.keys().next().value ?? null;
+}
 
 /** Reaplica o volume de um stream depois de mudar. */
 function aplicarVolume(slot) {
   const s = streams.get(slot);
-  s?.audio?.setVolume(volume);
+  if (s && s.audio) s.audio.setVolume(getVolume(s.userId));
 }
-
-// Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
-// 100%, ignorando o ajuste que a pessoa tinha feito.
-let volumeAntes = volume || 1;
 // Qual tela está no palco, e se ela ocupa tudo. Guardados fora do render
 // porque a grade é reconstruída a cada mudança de estado da sala, e a escolha
 // de quem assiste precisa sobreviver a isso.
@@ -850,6 +864,7 @@ function openTileMenu(x, y, slot, name) {
 function buildMenuVolume(_userId, name, _slot) {
   const bloco = document.createElement('div');
   bloco.className = 'menu-volume';
+  bloco.dataset.userid = _userId;
 
   const rotulo = document.createElement('span');
   rotulo.className = 'menu-volume-nome';
@@ -869,13 +884,13 @@ function buildMenuVolume(_userId, name, _slot) {
   const valor = document.createElement('span');
   valor.className = 'menu-volume-valor';
 
-  const pct = Math.round(volume * 100);
+  const pct = Math.round(getVolume(_userId) * 100);
   barra.value = String(pct);
   valor.textContent = `${pct}%`;
 
   barra.addEventListener('input', () => {
     const nivel = Number(barra.value) / 100;
-    setVolume(nivel);
+    setVolume(_userId, nivel);
   });
 
   linha.append(barra, valor);
@@ -1069,7 +1084,7 @@ function startAudio(slot, config) {
   if (!s) return;
 
   s.audio?.stop();
-  s.audio = createAudio({ onError: (m) => toast(m, true), volume });
+  s.audio = createAudio({ onError: (m) => toast(m, true), volume: getVolume(s.userId) });
   if (!s.audio.start(config)) {
     s.audio = null;
     return;
@@ -1151,10 +1166,11 @@ function ensureStatsTimer() {
     $('pRes').textContent = s.player.getSizes().video;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
+    const v = getVolume(s.userId);
     if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
     else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
-    else if (volume === 0) $('pSom').textContent = 'silenciado aqui';
-    else $('pSom').textContent = `tocando · ${Math.round(volume * 100)}%`;
+    else if (v === 0) $('pSom').textContent = 'silenciado aqui';
+    else $('pSom').textContent = `tocando · ${Math.round(v * 100)}%`;
   }, 1000);
 }
 
@@ -2438,42 +2454,70 @@ $('camera').addEventListener('click', () => {
 
 /** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
-  const pct = Math.round(volume * 100);
+  // Atualiza os sliders dos menus de contexto abertos
+  for (const bloco of document.querySelectorAll('.menu-volume')) {
+    const userId = bloco.dataset.userid;
+    if (!userId) continue;
+    const vPct = Math.round(getVolume(userId) * 100);
+    const barra = bloco.querySelector('input[type="range"]');
+    if (barra) barra.value = String(vPct);
+    const valorEl = bloco.querySelector('.menu-volume-valor');
+    if (valorEl) valorEl.textContent = `${vPct}%`;
+  }
+
+  // Atualiza a barra global (que reflete o slot principal)
+  const principalSlot = getPrincipalSlot();
+  const principalUserId = principalSlot !== null ? streams.get(principalSlot)?.userId : null;
+  const principalVolume = principalUserId ? getVolume(principalUserId) : 1;
+  const pct = Math.round(principalVolume * 100);
+
   const volumeEl = $('volume');
   if (volumeEl) volumeEl.value = String(pct);
   const volumeValEl = $('volumeVal');
   if (volumeValEl) volumeValEl.textContent = pct + '%';
 
-  const rotulo = volume === 0 ? 'Ligar o som' : 'Silenciar';
+  const rotulo = principalVolume === 0 ? 'Ligar o som' : 'Silenciar';
   const muteEl = $('mute');
   if (muteEl) {
     muteEl.setAttribute('aria-label', rotulo);
     muteEl.title = rotulo;
-    muteEl.classList.toggle('on', volume === 0);
+    muteEl.classList.toggle('on', principalVolume === 0);
   }
   const muteOnEl = $('muteOn');
-  if (muteOnEl) muteOnEl.hidden = volume === 0;
+  if (muteOnEl) muteOnEl.hidden = principalVolume === 0;
   const muteOffEl = $('muteOff');
-  if (muteOffEl) muteOffEl.hidden = volume !== 0;
-
-  for (const b of document.querySelectorAll('.menu-volume input[type="range"]')) {
-    b.value = String(pct);
-    const v = b.closest('.menu-volume-linha')?.querySelector('.menu-volume-valor');
-    if (v) v.textContent = `${pct}%`;
-  }
+  if (muteOffEl) muteOffEl.hidden = principalVolume !== 0;
 }
 
-function setVolume(valor) {
-  volume = Math.min(2, Math.max(0, valor));
-  if (volume > 0) volumeAntes = volume;
-  store('volume', String(volume));
-  for (const slot of streams.keys()) aplicarVolume(slot);
+function setVolume(userId, valor) {
+  if (!userId) return;
+  const v = Math.min(2, Math.max(0, valor));
+  volumes[userId] = v;
+  if (v > 0) volumesAntes[userId] = v;
+  store('volumes', JSON.stringify(volumes));
+
+  for (const [slot, s] of streams.entries()) {
+    if (s.userId === userId) aplicarVolume(slot);
+  }
   renderVolume();
 }
 
 // Clique no alto-falante silencia e devolve; o cursor ajusta no meio termo.
-$('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
-$('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
+$('mute').addEventListener('click', () => {
+  const principalSlot = getPrincipalSlot();
+  const userId = principalSlot !== null ? streams.get(principalSlot)?.userId : null;
+  if (userId) {
+    const volAtual = getVolume(userId);
+    setVolume(userId, volAtual === 0 ? getVolumeAntes(userId) : 0);
+  }
+});
+$('volume').addEventListener('input', (e) => {
+  const principalSlot = getPrincipalSlot();
+  const userId = principalSlot !== null ? streams.get(principalSlot)?.userId : null;
+  if (userId) {
+    setVolume(userId, Number(e.target.value) / 100);
+  }
+});
 
 // ------------------------------------------------------- modais das salas
 
