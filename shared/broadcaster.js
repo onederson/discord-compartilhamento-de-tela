@@ -46,7 +46,7 @@ const KEYFRAME_EVERY_MS = 3000;
 // Reconexão automática do broadcaster: o viewer já reconectava, mas a aba de
 // captura não — qualquer oscilação de rede matava a transmissão de vez, e a
 // pessoa tinha que escolher a tela de novo.
-const MAX_RECONNECT_ATTEMPTS = 5;
+const MAX_RECONNECT_ATTEMPTS = 30;
 const RECONNECT_BASE_MS = 1000;
 
 // Keepalive: mantém a conexão viva através de proxies e load balancers que

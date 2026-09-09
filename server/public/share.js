@@ -102,19 +102,7 @@ try {
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        try {
-          painel.trocarTela()?.catch(() => {
-            painel.setStatus(
-              'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-              'aviso',
-            );
-          });
-        } catch {
-          painel.setStatus(
-            'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-            'aviso',
-          );
-        }
+        solicitarTrocaDeTela(painel);
       }
       return;
     }
@@ -343,19 +331,7 @@ function ligarControle() {
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        try {
-          painel.trocarTela()?.catch(() => {
-            painel.setStatus(
-              'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-              'aviso',
-            );
-          });
-        } catch {
-          painel.setStatus(
-            'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-            'aviso',
-          );
-        }
+        solicitarTrocaDeTela(painel);
       }
 
       if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
@@ -798,6 +774,36 @@ function criarPainel(fonte) {
       });
     },
   };
+}
+
+function solicitarTrocaDeTela(painel) {
+  const overlay = $('overlay-trocar-tela');
+  
+  const exibirOverlay = () => {
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.onclick = () => {
+        overlay.hidden = true;
+        painel.trocarTela();
+      };
+    } else {
+      painel.setStatus(
+        'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
+        'aviso',
+      );
+    }
+  };
+
+  try {
+    const promise = painel.trocarTela();
+    if (promise) {
+      promise.catch(() => exibirOverlay());
+    } else {
+      exibirOverlay();
+    }
+  } catch {
+    exibirOverlay();
+  }
 }
 
 // ------------------------------------------------------------------ arranque

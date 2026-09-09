@@ -2169,13 +2169,9 @@ const JANELA_CAPTURA = 'discord-screen-captura';
  * - Se não houver nenhuma janela aberta: abre uma nova janela de captura.
  */
 function gerenciarAba(fonte, { acao = null } = {}) {
-  // Ao trocar de tela, recriar a janela garante que o navegador venha para a frente
-  // com a nova aba ativa e o seletor nativo aberto de imediato, sem ficar preso
-  // atrás de outras abas ou exigir cliques adicionais.
-  if (acao === 'trocar-tela') {
-    fecharTodasAbasEIniciar(fonte, { motivo: 'trocar-tela' });
-    return;
-  }
+  // Ao trocar de tela, a aba existente de transmissão será reaproveitada.
+  // Ela exibirá um overlay para que o usuário clique e abra o seletor nativo,
+  // permitindo que a tela antiga continue transmitindo até a nova ser selecionada.
 
   const qtd = quantidadeAbas();
 
