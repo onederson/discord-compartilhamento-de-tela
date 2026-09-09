@@ -1545,7 +1545,17 @@ export function createBroadcaster({
       displaySurface = track.getSettings?.().displaySurface ?? null;
       await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
       track.contentHint = 'motion';
-      track.addEventListener('ended', () => stop('Você parou o compartilhamento pelo navegador.'));
+      track.addEventListener('ended', () => {
+        if (onTrackEnded) {
+          onTrackEnded();
+        } else {
+          stop(
+            fonte === 'camera'
+              ? 'A câmera foi desligada.'
+              : 'Você parou o compartilhamento pelo navegador.',
+          );
+        }
+      });
 
       // Encerra o loop anterior antes de abrir outro, senão os dois disputam o
       // encoder e a fila estoura.
