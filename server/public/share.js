@@ -784,7 +784,14 @@ function solicitarTrocaDeTela(painel) {
       overlay.hidden = false;
       overlay.onclick = () => {
         overlay.hidden = true;
-        painel.trocarTela();
+        const p = painel.trocarTela();
+        if (p) {
+          p.catch((err) => {
+            // Se falhou por falta de permissão ou cancelamento do usuário na segunda vez,
+            // apenas mostre um aviso discreto, não force o overlay novamente para evitar loop infinito.
+            painel.setStatus('Troca de tela cancelada ou bloqueada.', 'aviso');
+          });
+        }
       };
     } else {
       painel.setStatus(
@@ -797,9 +804,15 @@ function solicitarTrocaDeTela(painel) {
   try {
     const promise = painel.trocarTela();
     if (promise) {
-      promise.catch(() => exibirOverlay());
+      promise.catch((err) => {
+        // A primeira falha automática (por falta de user gesture vindo do BroadcastChannel)
+        // cai aqui, então exibimos o overlay para o usuário clicar.
+        exibirOverlay();
+      });
     } else {
-      exibirOverlay();
+      // Se retornou null (ex: throttle de 2500ms), não faz nada ou mostra aviso.
+      // Retirar o exibirOverlay() daqui previne bugs de cliques duplos gerando overlay.
+      painel.setStatus('Aguarde um momento antes de trocar a tela novamente.', 'aviso');
     }
   } catch {
     exibirOverlay();

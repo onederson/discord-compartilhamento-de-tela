@@ -805,10 +805,14 @@ app.get('/focar', (req, res) => {
 <body>
   <div class="card">
     <h2>${tituloInicial}</h2>
-    <p>O navegador foi trazido para a frente! Se esta guia não fechar sozinha, clique abaixo para ir para a transmissão.</p>
-    <button onclick="focarEFaixar()">Ir para a transmissão</button>
+    <p>Clique no botão abaixo ou pressione <b>ENTER</b> para ir para a transmissão e escolher a nova tela.</p>
+    <button onclick="focarEFaixar()" class="btn-primary" style="padding: 12px 24px; font-size: 16px; margin-top: 20px;">Ir para a transmissão</button>
   </div>
   <script>
+    document.addEventListener('keydown', (e) => {
+      // Se apertar Enter, Espaço, ou qualquer tecla, já aciona a troca.
+      focarEFaixar();
+    });
     const params = new URLSearchParams(location.search);
     const fonte = params.get('fonte');
     const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
@@ -834,9 +838,6 @@ app.get('/focar', (req, res) => {
         bc.close();
       } catch {}
 
-      // Aguarda o navegador efetivar o foco na aba discord-screen-captura
-      // antes de fechar esta guia. Fechamento instantâneo síncrono faz o
-      // Chrome restaurar a aba anterior (ex: Google).
       setTimeout(() => {
         try {
           window.open('', '_self');
@@ -844,8 +845,10 @@ app.get('/focar', (req, res) => {
         } catch {}
       }, 350);
     }
-
-    focarEFaixar();
+    
+    // Não dispara automaticamente para evitar que o navegador bloqueie o foco
+    // na aba alvo e retorne para a aba anterior (ex: Google). O usuário precisa
+    // clicar no botão para gerar um "user gesture" válido.
   </script>
 </body>
 </html>`);
