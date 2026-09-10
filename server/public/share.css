@@ -441,10 +441,12 @@ body {
 /* --------------------------------------------------------------------------
    B. Hero Tile - Screen Module
    -------------------------------------------------------------------------- */
-.setup-container {
+.setup-container,
+.live-container {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  width: 100%;
 }
 
 /* Estado vazio / Sem preview */
@@ -616,7 +618,8 @@ video {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
-  margin-top: 4px;
+  margin: 0;
+  width: 100%;
 }
 
 @media (min-width: 640px) {
@@ -633,6 +636,7 @@ video {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
   transition: var(--transition-fast);
 }
 
@@ -682,6 +686,8 @@ video {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  margin: 0;
+  width: 100%;
 }
 
 .watchers-title {
@@ -900,7 +906,8 @@ button:disabled {
 .stream-action-dock {
   display: flex;
   justify-content: center;
-  margin-top: 10px;
+  margin: 4px 0 0;
+  width: 100%;
 }
 
 .stream-action-dock button {
