@@ -1,17 +1,27 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Transmitir</title>
     <script>
       window.name = 'discord-screen-captura';
+      // Inicialização imediata de tema para evitar FOUC
+      (function () {
+        try {
+          const salvo = localStorage.getItem('apple_theme');
+          const tema = salvo || 'dark';
+          document.documentElement.setAttribute('data-theme', tema);
+        } catch {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=51" />
+    <link rel="stylesheet" href="/share.css?v=52" />
   </head>
   <body>
     <div class="apple-shell">
-      <!-- A. Floating Header (Cápsula de Status) -->
+      <!-- A. Floating Header (Cápsula de Status & Seletor de Tema) -->
       <header class="brand apple-header">
         <div class="brand-left">
           <img src="/logo.jpg" alt="Logo" width="40" height="40" class="brand-logo" />
@@ -20,7 +30,63 @@
             <span class="brand-sub">Sala de Tela</span>
           </div>
         </div>
+
         <div class="brand-right">
+          <!-- Theme Switcher (Segmented Control Apple) -->
+          <div class="theme-segmented-control" role="radiogroup" aria-label="Seletor de Tema">
+            <button
+              type="button"
+              class="theme-btn"
+              id="theme-light"
+              role="radio"
+              aria-checked="false"
+              title="Modo Claro"
+            >
+              <svg
+                class="theme-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+              <span>Light</span>
+            </button>
+            <button
+              type="button"
+              class="theme-btn active"
+              id="theme-dark"
+              role="radio"
+              aria-checked="true"
+              title="Modo Escuro"
+            >
+              <svg
+                class="theme-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <span>Dark</span>
+            </button>
+            <span class="theme-thumb" aria-hidden="true"></span>
+          </div>
+
           <div class="status-pill status-live-pill">
             <span class="dot"></span>
             <span>Ao Vivo</span>
@@ -307,6 +373,38 @@
       </div>
     </div>
 
-    <script type="module" src="/share.js?v=51"></script>
+    <!-- Script de Gestão do Tema (Light / Dark) -->
+    <script>
+      (function () {
+        const doc = document.documentElement;
+        const btnLight = document.getElementById('theme-light');
+        const btnDark = document.getElementById('theme-dark');
+
+        function aplicarTema(tema) {
+          doc.setAttribute('data-theme', tema);
+          try {
+            localStorage.setItem('apple_theme', tema);
+          } catch {}
+
+          const isDark = tema === 'dark';
+          if (btnDark) {
+            btnDark.classList.toggle('active', isDark);
+            btnDark.setAttribute('aria-checked', String(isDark));
+          }
+          if (btnLight) {
+            btnLight.classList.toggle('active', !isDark);
+            btnLight.setAttribute('aria-checked', String(!isDark));
+          }
+        }
+
+        const temaAtual = doc.getAttribute('data-theme') || 'dark';
+        aplicarTema(temaAtual);
+
+        btnLight?.addEventListener('click', () => aplicarTema('light'));
+        btnDark?.addEventListener('click', () => aplicarTema('dark'));
+      })();
+    </script>
+
+    <script type="module" src="/share.js?v=52"></script>
   </body>
 </html>

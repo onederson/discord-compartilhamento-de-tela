@@ -1,23 +1,119 @@
 /* ==========================================================================
-   Apple Dark Mode Bento Grid Design System
+   Apple Design System: Bento Grid & Realtime Theme Switching (Dark / Light)
    Transmitir / Web Dashboard
    ========================================================================== */
 
-:root {
-  /* Apple Palette */
+/* --------------------------------------------------------------------------
+   Tokens por Tema
+   -------------------------------------------------------------------------- */
+:root,
+[data-theme="dark"] {
+  /* Dark Mode (Padrão Pro) */
   --bg-global: #000000;
   --surface-tile: rgba(255, 255, 255, 0.04);
   --surface-tile-hover: rgba(255, 255, 255, 0.065);
   --surface-elevated: rgba(255, 255, 255, 0.08);
   --border-subtle: 1px solid rgba(255, 255, 255, 0.08);
-  --border-focus: rgba(0, 113, 227, 0.5);
+  --border-color: rgba(255, 255, 255, 0.08);
 
-  /* Typography Colors */
+  /* Tipografia */
   --text-primary: #f5f5f7;
   --text-secondary: #86868b;
   --text-muted: #6e6e73;
 
-  /* Accent & Status Colors */
+  /* Superfície Secundária de Botões */
+  --btn-secondary-surface: rgba(255, 255, 255, 0.1);
+  --btn-secondary-hover: rgba(255, 255, 255, 0.16);
+  --btn-glass-surface: rgba(20, 20, 24, 0.65);
+  --btn-glass-border: rgba(255, 255, 255, 0.14);
+
+  /* Segmented Control (Apple Dark) */
+  --seg-bg: rgba(255, 255, 255, 0.07);
+  --seg-thumb: rgba(255, 255, 255, 0.2);
+  --seg-thumb-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  --seg-text: #86868b;
+  --seg-text-active: #ffffff;
+
+  /* Sombras & Superfícies */
+  --tile-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --header-bg: rgba(255, 255, 255, 0.04);
+  --header-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+  --empty-bg: rgba(255, 255, 255, 0.02);
+  --empty-border: rgba(255, 255, 255, 0.12);
+  --stat-bg: rgba(255, 255, 255, 0.03);
+  --stat-border: rgba(255, 255, 255, 0.06);
+  --watcher-chip-bg: rgba(255, 255, 255, 0.06);
+  --watcher-chip-border: rgba(255, 255, 255, 0.08);
+  --note-bg: rgba(255, 255, 255, 0.03);
+  --note-border: rgba(255, 255, 255, 0.06);
+  --modal-bg: rgba(28, 28, 30, 0.85);
+  --modal-border: rgba(255, 255, 255, 0.12);
+  --modal-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --menu-bg: rgba(28, 28, 30, 0.85);
+  --menu-border: rgba(255, 255, 255, 0.12);
+
+  /* Alertas */
+  --apple-amber: #ffd60a;
+  --apple-amber-bg: rgba(255, 159, 10, 0.08);
+  --apple-amber-border: rgba(255, 159, 10, 0.2);
+}
+
+[data-theme="light"] {
+  /* Light Mode (Apple Clean) */
+  --bg-global: #f5f5f7;
+  --surface-tile: rgba(255, 255, 255, 0.85);
+  --surface-tile-hover: #ffffff;
+  --surface-elevated: #ffffff;
+  --border-subtle: 1px solid rgba(0, 0, 0, 0.06);
+  --border-color: rgba(0, 0, 0, 0.06);
+
+  /* Tipografia */
+  --text-primary: #1d1d1f;
+  --text-secondary: #6e6e73;
+  --text-muted: #86868b;
+
+  /* Superfície Secundária de Botões */
+  --btn-secondary-surface: rgba(0, 0, 0, 0.05);
+  --btn-secondary-hover: rgba(0, 0, 0, 0.09);
+  --btn-glass-surface: rgba(255, 255, 255, 0.85);
+  --btn-glass-border: rgba(0, 0, 0, 0.1);
+
+  /* Segmented Control (Apple Clean) */
+  --seg-bg: rgba(0, 0, 0, 0.06);
+  --seg-thumb: #ffffff;
+  --seg-thumb-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  --seg-text: #6e6e73;
+  --seg-text-active: #1d1d1f;
+
+  /* Sombras & Superfícies */
+  --tile-shadow: 0 4px 24px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --header-bg: rgba(255, 255, 255, 0.75);
+  --header-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
+  --empty-bg: rgba(0, 0, 0, 0.02);
+  --empty-border: rgba(0, 0, 0, 0.1);
+  --stat-bg: rgba(0, 0, 0, 0.025);
+  --stat-border: rgba(0, 0, 0, 0.05);
+  --watcher-chip-bg: rgba(0, 0, 0, 0.04);
+  --watcher-chip-border: rgba(0, 0, 0, 0.06);
+  --note-bg: rgba(0, 0, 0, 0.025);
+  --note-border: rgba(0, 0, 0, 0.05);
+  --modal-bg: rgba(255, 255, 255, 0.9);
+  --modal-border: rgba(0, 0, 0, 0.08);
+  --modal-shadow: 0 24px 60px rgba(0, 0, 0, 0.15);
+  --menu-bg: rgba(255, 255, 255, 0.92);
+  --menu-border: rgba(0, 0, 0, 0.08);
+
+  /* Alertas */
+  --apple-amber: #b25e00;
+  --apple-amber-bg: rgba(255, 149, 0, 0.1);
+  --apple-amber-border: rgba(255, 149, 0, 0.25);
+}
+
+/* --------------------------------------------------------------------------
+   Tokens Globais (Ambos os Modos)
+   -------------------------------------------------------------------------- */
+:root {
+  /* Cores de Ação e Status */
   --apple-blue: #0071e3;
   --apple-blue-hover: #0077ed;
   --apple-blue-active: #0062c4;
@@ -26,15 +122,6 @@
   --apple-red: #ff453a;
   --apple-red-hover: #ff3b30;
   --apple-red-active: #d73329;
-  --apple-amber: #ffd60a;
-  --apple-amber-bg: rgba(255, 159, 10, 0.08);
-  --apple-amber-border: rgba(255, 159, 10, 0.2);
-
-  /* Secondary Button Surface */
-  --btn-secondary-surface: rgba(255, 255, 255, 0.1);
-  --btn-secondary-hover: rgba(255, 255, 255, 0.16);
-  --btn-glass-surface: rgba(20, 20, 24, 0.65);
-  --btn-glass-border: rgba(255, 255, 255, 0.14);
 
   /* Border Radii */
   --radius-tile: 28px;
@@ -44,6 +131,7 @@
   /* Timing & Motion */
   --apple-ease: cubic-bezier(0.16, 1, 0.3, 1);
   --transition-fast: all 0.2s var(--apple-ease);
+  --transition-theme: background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
 }
 
 /* --------------------------------------------------------------------------
@@ -72,6 +160,21 @@ body {
   justify-content: center;
   padding: 28px 20px 48px;
   overflow-x: hidden;
+  transition: var(--transition-theme);
+}
+
+/* Transição Suave Universal para Troca de Tema */
+.apple-header,
+.bento-tile,
+.stat-card,
+.watchers-box,
+.apple-modal,
+.note,
+.sem-preview,
+.theme-segmented-control,
+.theme-btn,
+.pill-btn-overlay {
+  transition: var(--transition-theme);
 }
 
 /* --------------------------------------------------------------------------
@@ -86,20 +189,21 @@ body {
 }
 
 /* --------------------------------------------------------------------------
-   A. Floating Header (Cápsula de Status)
+   A. Floating Header (Cápsula de Status & Theme Switcher)
    -------------------------------------------------------------------------- */
 .apple-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 20px;
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--header-bg);
   border: var(--border-subtle);
   border-radius: var(--radius-pill);
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
-  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
-  transition: var(--transition-fast);
+  box-shadow: var(--header-shadow);
+  gap: 16px;
+  flex-wrap: wrap;
 }
 
 .brand-left {
@@ -113,7 +217,7 @@ body {
   height: 38px;
   border-radius: var(--radius-pill);
   object-fit: cover;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid var(--border-color);
   flex-shrink: 0;
 }
 
@@ -139,9 +243,79 @@ body {
 .brand-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
+/* --------------------------------------------------------------------------
+   Theme Switcher (Segmented Control Apple)
+   -------------------------------------------------------------------------- */
+.theme-segmented-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+  background: var(--seg-bg);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-color);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  user-select: none;
+}
+
+.theme-btn {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  border: 0;
+  background: transparent;
+  color: var(--seg-text);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.2s var(--apple-ease);
+  line-height: 1;
+}
+
+.theme-btn.active {
+  color: var(--seg-text-active);
+  font-weight: 600;
+}
+
+.theme-icon {
+  width: 13px;
+  height: 13px;
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+
+/* Sliding Thumb com curva Apple */
+.theme-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: var(--radius-pill);
+  background: var(--seg-thumb);
+  box-shadow: var(--seg-thumb-shadow);
+  transition: transform 0.25s var(--apple-ease), background-color 0.3s ease;
+  z-index: 1;
+  pointer-events: none;
+}
+
+[data-theme="light"] .theme-thumb {
+  transform: translateX(0);
+}
+
+[data-theme="dark"] .theme-thumb {
+  transform: translateX(100%);
+}
+
+/* Status Pill "Ao Vivo" */
 .status-pill {
   display: inline-flex;
   align-items: center;
@@ -211,10 +385,10 @@ body {
   padding: 24px;
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
+  box-shadow: var(--tile-shadow);
   display: flex;
   flex-direction: column;
   gap: 20px;
-  transition: var(--transition-fast);
   position: relative;
   overflow: hidden;
 }
@@ -228,6 +402,10 @@ body {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
   pointer-events: none;
+}
+
+[data-theme="light"] .bento-tile::before {
+  background: linear-gradient(90deg, transparent, rgba(0, 0, 0, 0.04), transparent);
 }
 
 .bento-tile.chamando {
@@ -274,8 +452,8 @@ body {
   width: 100%;
   aspect-ratio: 16 / 9;
   border-radius: var(--radius-media);
-  border: 1px dashed rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px dashed var(--empty-border);
+  background: var(--empty-bg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -317,7 +495,7 @@ video {
   aspect-ratio: 16 / 9;
   border-radius: var(--radius-media);
   background: #000000;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-color);
   object-fit: contain;
   display: block;
 }
@@ -329,7 +507,7 @@ video {
   border-radius: var(--radius-media);
   overflow: hidden;
   background: #000000;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-color);
 }
 
 .video-live-badge {
@@ -387,12 +565,11 @@ video {
   -webkit-backdrop-filter: blur(20px);
   cursor: pointer;
   transition: var(--transition-fast);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
 }
 
 .pill-btn-overlay:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.16);
-  border-color: rgba(255, 255, 255, 0.25);
+  background: var(--surface-elevated);
   transform: translateY(-1px);
 }
 
@@ -406,8 +583,8 @@ video {
 .note {
   padding: 14px 16px;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--note-bg);
+  border: 1px solid var(--note-border);
   color: var(--text-secondary);
   font-size: 13px;
   line-height: 1.5;
@@ -449,8 +626,8 @@ video {
 }
 
 .stat-card {
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--stat-bg);
+  border: 1px solid var(--stat-border);
   border-radius: 18px;
   padding: 16px 18px;
   display: flex;
@@ -460,8 +637,8 @@ video {
 }
 
 .stat-card:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.1);
+  background: var(--surface-tile-hover);
+  border-color: var(--border-color);
   transform: translateY(-1px);
 }
 
@@ -498,8 +675,8 @@ video {
    E. Lista de Usuários ("Assistindo Agora")
    -------------------------------------------------------------------------- */
 .watchers-box {
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: var(--stat-bg);
+  border: 1px solid var(--stat-border);
   border-radius: 18px;
   padding: 16px;
   display: flex;
@@ -535,8 +712,8 @@ video {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--watcher-chip-bg);
+  border: 1px solid var(--watcher-chip-border);
   padding: 4px 12px 4px 4px;
   border-radius: var(--radius-pill);
   font-size: 13px;
@@ -546,8 +723,8 @@ video {
 }
 
 .watcher-chip:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: var(--surface-tile-hover);
+  border-color: var(--border-color);
 }
 
 .watcher-avatar {
@@ -563,7 +740,7 @@ video {
   font-weight: 700;
   color: #ffffff;
   flex-shrink: 0;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 /* --------------------------------------------------------------------------
@@ -744,10 +921,10 @@ button:disabled {
   list-style: none;
   border-radius: 18px;
   border: var(--border-subtle);
-  background: rgba(28, 28, 30, 0.85);
+  background: var(--menu-bg);
   backdrop-filter: blur(30px);
   -webkit-backdrop-filter: blur(30px);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.3);
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -767,7 +944,7 @@ button:disabled {
 }
 
 .apple-menu button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--surface-tile-hover);
 }
 
 .apple-menu button::before {
@@ -883,13 +1060,13 @@ button:disabled {
 }
 
 .apple-modal {
-  background: rgba(28, 28, 30, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--modal-bg);
+  border: 1px solid var(--modal-border);
   border-radius: var(--radius-tile);
   padding: 36px 32px;
   max-width: 480px;
   text-align: center;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7);
+  box-shadow: var(--modal-shadow);
   display: flex;
   flex-direction: column;
   align-items: center;
