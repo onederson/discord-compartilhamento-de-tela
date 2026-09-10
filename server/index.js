@@ -782,73 +782,71 @@ app.get('/focar', (req, res) => {
     }
     .card {
       background: #2b2d31;
-      padding: 24px 32px;
-      border-radius: 12px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-      max-width: 380px;
+      padding: 28px 32px;
+      border-radius: 14px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+      max-width: 420px;
+      border: 1px solid rgba(255,255,255,0.08);
     }
-    h2 { margin: 0 0 8px; font-size: 18px; }
-    p { margin: 0 0 16px; color: #949ba4; font-size: 14px; line-height: 1.4; }
+    .icon { font-size: 32px; margin-bottom: 12px; }
+    h2 { margin: 0 0 10px; font-size: 19px; font-weight: 600; }
+    p { margin: 0 0 12px; color: #949ba4; font-size: 14px; line-height: 1.5; }
+    .destaque { color: #f2f3f5; font-weight: 500; }
     button {
-      background: #5865f2;
+      background: #4e5058;
       color: #fff;
       border: none;
-      padding: 10px 20px;
-      border-radius: 6px;
+      padding: 10px 22px;
+      border-radius: 8px;
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
+      margin-top: 14px;
+      transition: background 0.15s;
     }
-    button:hover { background: #4752c4; }
+    button:hover { background: #6d6f78; }
   </style>
 </head>
 <body>
   <div class="card">
+    <div class="icon">📺</div>
     <h2>${tituloInicial}</h2>
-    <p>Clique no botão abaixo ou pressione <b>ENTER</b> para ir para a transmissão e escolher a nova tela.</p>
-    <button onclick="focarEFaixar()" class="btn-primary" style="padding: 12px 24px; font-size: 16px; margin-top: 20px;">Ir para a transmissão</button>
+    <p>O navegador foi trazido para a frente!</p>
+    <p class="destaque">
+      👉 Clique na aba <b>Transmitir</b> (com a bolinha vermelha 🔴) para escolher a nova janela ou tela.
+    </p>
+    <button onclick="fechar()">Fechar esta guia</button>
   </div>
   <script>
-    document.addEventListener('keydown', (e) => {
-      // Se apertar Enter, Espaço, ou qualquer tecla, já aciona a troca.
-      focarEFaixar();
-    });
+    // Identificador da janela de captura: discord-screen-captura
     const params = new URLSearchParams(location.search);
     const fonte = params.get('fonte');
     const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
 
-    let disparado = false;
-
-    function focarEFaixar() {
-      if (disparado) return;
-      disparado = true;
-
-      let focou = false;
-      try {
-        const w = window.open('', 'discord-screen-captura');
-        if (w && w !== window) {
-          w.focus();
-          focou = true;
-        }
-      } catch {}
-
+    function avisarAbaAlvo() {
       try {
         const bc = new BroadcastChannel('discord-screenshare-focus');
         bc.postMessage({ type: acao === 'trocar-tela' ? 'trocar-tela' : 'focar', fonte, acao });
         bc.close();
       } catch {}
-
-      setTimeout(() => {
-        try {
-          window.open('', '_self');
-          window.close();
-        } catch {}
-      }, 350);
     }
-    
-    // Não dispara automaticamente para evitar que o navegador bloqueie o foco
-    // na aba alvo e retorne para a aba anterior (ex: Google). O usuário precisa
-    // clicar no botão para gerar um "user gesture" válido.
+
+    function fechar() {
+      avisarAbaAlvo();
+      try {
+        window.close();
+      } catch {}
+    }
+
+    // Avisa imediatamente a aba de transmissão via BroadcastChannel
+    avisarAbaAlvo();
+
+    // Tenta fechar automaticamente caso o navegador autorize
+    setTimeout(() => {
+      try {
+        window.close();
+      } catch {}
+    }, 450);
   </script>
 </body>
 </html>`);

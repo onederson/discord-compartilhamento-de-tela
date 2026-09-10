@@ -709,6 +709,8 @@ function criarPainel(fonte) {
   if (!camera) {
     $('tela-change')?.addEventListener('click', async () => {
       if (!broadcaster) return;
+      const overlay = $('overlay-trocar-tela');
+      if (overlay) overlay.hidden = true;
       try {
         await broadcaster.changeScreen();
         setStatus('Tela alterada com sucesso.');
@@ -765,33 +767,59 @@ function criarPainel(fonte) {
     trocarSom: () => broadcaster?.trocarSom(),
     trocarTela: () => {
       const agora = Date.now();
-      if (agora - ultimaTrocaTela < 2500) return null;
+      if (agora - ultimaTrocaTela < 1000) return null;
       ultimaTrocaTela = agora;
-      return broadcaster?.changeScreen()?.finally(() => {
-        setTimeout(() => {
-          if (ultimaTrocaTela === agora) ultimaTrocaTela = 0;
-        }, 500);
+      const promise = broadcaster?.changeScreen();
+      if (!promise) {
+        ultimaTrocaTela = 0;
+        return null;
+      }
+      return promise.finally(() => {
+        ultimaTrocaTela = 0;
       });
     },
   };
 }
 
+let ultimaSolicitacaoTroca = 0;
+let aguardandoVisibilidadeParaTroca = false;
+
 function solicitarTrocaDeTela(painel) {
+  const agora = Date.now();
+  // Evita disparos duplicados em cascata (WebSocket + BroadcastChannel)
+  if (agora - ultimaSolicitacaoTroca < 1500) {
+    return;
+  }
+  ultimaSolicitacaoTroca = agora;
+
   const overlay = $('overlay-trocar-tela');
-  
+
+  const esconderOverlay = () => {
+    if (overlay) overlay.hidden = true;
+  };
+
+  const executarTroca = () => {
+    esconderOverlay();
+    painel.trocarTela()
+      ?.then(() => {
+        esconderOverlay();
+        painel.setStatus('Tela alterada com sucesso.', 'ok');
+      })
+      ?.catch((err) => {
+        esconderOverlay();
+        if (err?.name === 'NotAllowedError') {
+          painel.setStatus('Troca de tela cancelada.', 'aviso');
+        } else {
+          painel.setStatus(`Erro ao trocar tela: ${err?.message || err}`, 'error');
+        }
+      });
+  };
+
   const exibirOverlay = () => {
     if (overlay) {
       overlay.hidden = false;
       overlay.onclick = () => {
-        overlay.hidden = true;
-        const p = painel.trocarTela();
-        if (p) {
-          p.catch((err) => {
-            // Se falhou por falta de permissão ou cancelamento do usuário na segunda vez,
-            // apenas mostre um aviso discreto, não force o overlay novamente para evitar loop infinito.
-            painel.setStatus('Troca de tela cancelada ou bloqueada.', 'aviso');
-          });
-        }
+        executarTroca();
       };
     } else {
       painel.setStatus(
@@ -801,23 +829,58 @@ function solicitarTrocaDeTela(painel) {
     }
   };
 
+  // Se a aba estiver em segundo plano (document.hidden), tentar getDisplayMedia()
+  // é certeza de NotAllowedError automático pelo navegador (falta de user gesture na aba).
+  // Aguardamos o usuário focar a aba para exibir o aviso/overlay limpo.
+  if (document.hidden) {
+    if (!aguardandoVisibilidadeParaTroca) {
+      aguardandoVisibilidadeParaTroca = true;
+      const aoFicarVisivel = () => {
+        if (!document.hidden) {
+          aguardandoVisibilidadeParaTroca = false;
+          document.removeEventListener('visibilitychange', aoFicarVisivel);
+          window.removeEventListener('focus', aoFicarVisivel);
+          exibirOverlay();
+        }
+      };
+      document.addEventListener('visibilitychange', aoFicarVisivel);
+      window.addEventListener('focus', aoFicarVisivel);
+    }
+    return;
+  }
+
+  // Se a aba já estiver visível:
   try {
     const promise = painel.trocarTela();
     if (promise) {
-      promise.catch((err) => {
-        // A primeira falha automática (por falta de user gesture vindo do BroadcastChannel)
-        // cai aqui, então exibimos o overlay para o usuário clicar.
-        exibirOverlay();
-      });
+      promise
+        .then(() => {
+          esconderOverlay();
+          painel.setStatus('Tela alterada com sucesso.', 'ok');
+        })
+        .catch((err) => {
+          if (err?.name === 'NotAllowedError' || err?.name === 'InvalidStateError') {
+            // Se falhou porque o navegador exigiu clique no documento:
+            exibirOverlay();
+          } else {
+            esconderOverlay();
+            painel.setStatus(`Erro: ${err?.message || err}`, 'error');
+          }
+        });
     } else {
-      // Se retornou null (ex: throttle de 2500ms), não faz nada ou mostra aviso.
-      // Retirar o exibirOverlay() daqui previne bugs de cliques duplos gerando overlay.
-      painel.setStatus('Aguarde um momento antes de trocar a tela novamente.', 'aviso');
+      exibirOverlay();
     }
   } catch {
     exibirOverlay();
   }
 }
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const overlay = $('overlay-trocar-tela');
+    if (overlay && !overlay.hidden) overlay.hidden = true;
+  }
+});
 
 // ------------------------------------------------------------------ arranque
 
