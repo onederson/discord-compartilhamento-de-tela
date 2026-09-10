@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sala de Tela</title>
-    <script type="module" crossorigin src="/assets/index-DSC0cFWs.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CqzMqekJ.css">
+    <script type="module" crossorigin src="/assets/index-CSHNtRXV.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Bc1BOLAB.css">
   </head>
   <body>
     <div id="app">
@@ -17,7 +17,14 @@
       <main id="grid" class="grid"></main>
 
       <div id="empty" class="empty">
-        <div class="icon">🖥️</div>
+        <div class="empty-icon-wrap">
+          <svg class="empty-display-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+          <span class="empty-pulse-ring"></span>
+        </div>
         <h1 id="emptyTitle">Conectando…</h1>
         <p id="emptyText" class="muted">Entrando na sala</p>
         <button id="emptyRetry" class="btn go empty-retry" hidden>Recarregar atividade</button>

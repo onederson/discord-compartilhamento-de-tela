@@ -1,38 +1,130 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Transmitir</title>
     <script>
       window.name = 'discord-screen-captura';
+      // Inicialização imediata de tema para evitar FOUC
+      (function () {
+        try {
+          const salvo = localStorage.getItem('apple_theme');
+          const tema = salvo || 'dark';
+          document.documentElement.setAttribute('data-theme', tema);
+        } catch {
+          document.documentElement.setAttribute('data-theme', 'dark');
+        }
+      })();
     </script>
-    <!-- ?v= existe porque share.js/css têm nome fixo. Quem abriu a página antes
-         dos cabeçalhos no-store guardou a versão antiga por heurística do
-         navegador, e continuaria usando ela para sempre. Trocar a query força
-         uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
-    <link rel="stylesheet" href="/share.css?v=50" />
+    <link rel="stylesheet" href="/share.css?v=52" />
   </head>
   <body>
-    <main class="card">
-      <header class="brand">
-        <img src="/logo.jpg" alt="" width="44" height="44" class="brand-logo" />
-        <div>
-          <h1>Transmitir</h1>
-          <p class="brand-sub">Sala de Tela</p>
+    <div class="apple-shell">
+      <!-- A. Floating Header (Cápsula de Status & Seletor de Tema) -->
+      <header class="brand apple-header">
+        <div class="brand-left">
+          <img src="/logo.jpg" alt="Logo" width="40" height="40" class="brand-logo" />
+          <div class="brand-titles">
+            <h1>Transmitir</h1>
+            <span class="brand-sub">Sala de Tela</span>
+          </div>
+        </div>
+
+        <div class="brand-right">
+          <!-- Theme Switcher (Segmented Control Apple) -->
+          <div class="theme-segmented-control" role="radiogroup" aria-label="Seletor de Tema">
+            <button
+              type="button"
+              class="theme-btn"
+              id="theme-light"
+              role="radio"
+              aria-checked="false"
+              title="Modo Claro"
+            >
+              <svg
+                class="theme-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="5"></circle>
+                <line x1="12" y1="1" x2="12" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="23"></line>
+                <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                <line x1="1" y1="12" x2="3" y2="12"></line>
+                <line x1="21" y1="12" x2="23" y2="12"></line>
+                <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+              </svg>
+              <span>Light</span>
+            </button>
+            <button
+              type="button"
+              class="theme-btn active"
+              id="theme-dark"
+              role="radio"
+              aria-checked="true"
+              title="Modo Escuro"
+            >
+              <svg
+                class="theme-icon"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+              </svg>
+              <span>Dark</span>
+            </button>
+            <span class="theme-thumb" aria-hidden="true"></span>
+          </div>
+
+          <div class="status-pill status-live-pill">
+            <span class="dot"></span>
+            <span>Ao Vivo</span>
+          </div>
         </div>
       </header>
 
-      <!-- Erro que impede a página inteira: token inválido, navegador sem
-           suporte. Os erros de cada fonte ficam no bloco dela. -->
+      <!-- Erro global / status da página -->
       <p id="pageStatus" class="status" role="status"></p>
 
-      <div class="fontes">
-        <section class="bloco" id="bloco-tela">
-          <h2>Tela</h2>
+      <!-- B. Bento Grid Layout -->
+      <main class="bento-grid">
+        <!-- B & C. Card Principal (Hero Tile - Screen Preview & Bento Stats) -->
+        <section class="bloco bento-tile bento-hero" id="bloco-tela">
+          <div class="tile-header">
+            <div class="tile-header-title">
+              <svg class="tile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+              </svg>
+              <h2>Tela</h2>
+            </div>
+          </div>
 
-          <div id="tela-setup">
-            <div class="sem-preview" id="tela-vazio">Sem preview</div>
+          <!-- Estado de Configuração (Setup) -->
+          <div id="tela-setup" class="setup-container">
+            <div class="sem-preview" id="tela-vazio">
+              <div class="empty-state-content">
+                <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                  <line x1="8" y1="21" x2="16" y2="21"></line>
+                  <line x1="12" y1="17" x2="12" y2="21"></line>
+                </svg>
+                <span class="empty-title">Nenhuma tela selecionada</span>
+                <span class="empty-subtitle">Escolha uma janela ou tela inteira para iniciar</span>
+              </div>
+            </div>
             <video id="tela-previa" muted playsinline hidden></video>
 
             <p class="note" id="tela-nota">
@@ -44,19 +136,20 @@
                 href="https://github.com/onederson/discord-compartilhamento-de-tela/blob/main/docs/windows.md#a-imagem-congela-quando-eu-clico-no-jogo-opengl-e-vulkan"
                 target="_blank"
                 rel="noopener"
-                >O jogo congela quando você clica nele?</a
+                >O jogo congela ao clicar nele?</a
               >
             </p>
 
-            <!-- A seta escolhe sem transmitir; o botão transmite o que estiver
-                 escolhido. Separados porque conferir o enquadramento e ir ao
-                 ar são decisões diferentes, e juntas não dá para voltar atrás
-                 diante de quem já está assistindo. -->
             <div class="acao">
-              <button id="tela-start" class="primary">Escolher janela ou tela</button>
+              <button id="tela-start" class="primary pill-button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                Escolher janela ou tela
+              </button>
               <button
                 id="tela-escolher"
-                class="primary seta"
+                class="primary seta pill-icon-btn"
                 title="Ver prévia antes de transmitir"
                 aria-label="Ver prévia antes de transmitir"
               >
@@ -65,48 +158,149 @@
             </div>
           </div>
 
-          <div id="tela-live" hidden>
-            <div class="live-badge"><span class="dot"></span> No ar</div>
-            <video id="tela-preview" muted playsinline></video>
-            <div class="stats">
-              <div><strong id="tela-viewers">0</strong><span>assistindo</span></div>
-              <div><strong id="tela-fps">—</strong><span>quadros</span></div>
-              <div><strong id="tela-bitrate">—</strong><span>enviando</span></div>
-              <div><strong id="tela-elapsed">00:00</strong><span>no ar</span></div>
+          <!-- Estado Ao Vivo (Live Stream) -->
+          <div id="tela-live" class="live-container" hidden>
+            <div class="video-preview-wrapper">
+              <div class="video-live-badge"><span class="dot"></span> No ar</div>
+              <video id="tela-preview" muted playsinline></video>
+              
+              <!-- Sobreposição no rodapé da prévia -->
+              <div class="video-overlay-controls">
+                <button id="tela-change" class="secondary pill-btn-overlay">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="16 3 21 3 21 8"></polyline>
+                    <line x1="4" y1="20" x2="21" y2="3"></line>
+                    <polyline points="21 16 21 21 16 21"></polyline>
+                    <line x1="15" y1="15" x2="21" y2="21"></line>
+                    <line x1="4" y1="4" x2="9" y2="9"></line>
+                  </svg>
+                  Trocar de tela ou janela
+                </button>
+                <button id="somAba" class="secondary pill-btn-overlay" hidden>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                  </svg>
+                  Escolher áudio separado
+                </button>
+              </div>
             </div>
 
-            <div id="tela-watchers-box" class="watchers-box" hidden>
-              <div class="watchers-title">Assistindo agora</div>
+            <!-- C. Módulo de Métricas (Bento Stats) -->
+            <div class="stats bento-stats-grid">
+              <div class="stat-card">
+                <div class="stat-meta">
+                  <span>Assistindo</span>
+                  <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                    <circle cx="12" cy="12" r="3"></circle>
+                  </svg>
+                </div>
+                <strong id="tela-viewers" class="stat-value">0</strong>
+              </div>
+
+              <div class="stat-card">
+                <div class="stat-meta">
+                  <span>Quadros/seg</span>
+                  <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+                  </svg>
+                </div>
+                <strong id="tela-fps" class="stat-value">—</strong>
+              </div>
+
+              <div class="stat-card">
+                <div class="stat-meta">
+                  <span>Taxa de Envio</span>
+                  <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+                    <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+                    <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+                    <line x1="12" y1="20" x2="12.01" y2="20"></line>
+                  </svg>
+                </div>
+                <strong id="tela-bitrate" class="stat-value">—</strong>
+              </div>
+
+              <div class="stat-card">
+                <div class="stat-meta">
+                  <span>Duração</span>
+                  <svg class="stat-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="12" r="10"></circle>
+                    <polyline points="12 6 12 12 16 14"></polyline>
+                  </svg>
+                </div>
+                <strong id="tela-elapsed" class="stat-value">00:00</strong>
+              </div>
+            </div>
+
+            <!-- E. Lista de Usuários ("Assistindo Agora") -->
+            <div id="tela-watchers-box" class="watchers-box bento-watchers" hidden>
+              <div class="watchers-title">
+                <span class="watchers-dot"></span>
+                <span>Assistindo agora</span>
+              </div>
               <div id="tela-watchers-list" class="watchers-list"></div>
             </div>
 
-            <button id="tela-change" class="secondary">Trocar de tela ou janela</button>
-            <button id="somAba" class="secondary" hidden>Escolher áudio separado</button>
-            <button id="tela-stop" class="danger">Parar de transmitir a tela</button>
+            <!-- F. Dock de Ações Rápidas -->
+            <div class="stream-action-dock">
+              <button id="tela-stop" class="danger pill-button pill-button-danger">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect>
+                </svg>
+                Parar de transmitir a tela
+              </button>
+            </div>
           </div>
 
           <div id="tela-recovery" class="recovery" hidden>
             <p class="status error">
               O vídeo parou: a janela compartilhada fechou ou mudou de resolução.
             </p>
-            <button id="tela-recover-btn" class="primary">Selecionar tela novamente</button>
+            <button id="tela-recover-btn" class="primary pill-button">Selecionar tela novamente</button>
           </div>
 
           <p id="tela-status" class="status" role="status"></p>
         </section>
 
-        <section class="bloco" id="bloco-camera">
-          <h2>Câmera</h2>
+        <!-- D. Card Lateral (Módulo de Câmera) -->
+        <section class="bloco bento-tile bento-camera" id="bloco-camera">
+          <div class="tile-header">
+            <div class="tile-header-title">
+              <svg class="tile-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                <circle cx="12" cy="13" r="4"></circle>
+              </svg>
+              <h2>Câmera</h2>
+            </div>
+          </div>
 
-          <div id="camera-setup">
-            <div class="sem-preview" id="camera-vazio">Sem preview</div>
+          <!-- Estado de Configuração da Câmera -->
+          <div id="camera-setup" class="setup-container">
+            <div class="sem-preview" id="camera-vazio">
+              <div class="empty-state-content">
+                <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+                  <circle cx="12" cy="13" r="4"></circle>
+                </svg>
+                <span class="empty-title">Câmera Desativada</span>
+                <span class="empty-subtitle">Transmita sua webcam junto com a tela</span>
+              </div>
+            </div>
             <video id="camera-previa" muted playsinline hidden></video>
 
             <div class="acao">
-              <button id="camera-start" class="primary">Ligar a câmera</button>
+              <button id="camera-start" class="primary pill-button">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M23 7l-7 5 7 5V7z"></path>
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                </svg>
+                Ligar a câmera
+              </button>
               <button
                 id="camera-escolher"
-                class="primary seta"
+                class="primary seta pill-icon-btn"
                 title="Escolher a câmera"
                 aria-label="Escolher a câmera"
                 aria-haspopup="menu"
@@ -115,17 +309,27 @@
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
               </button>
 
-              <!-- Preenchido depois da permissão: antes dela o navegador entrega
-                   os dispositivos sem nome, e uma lista de itens em branco não
-                   ajuda ninguém a escolher. -->
-              <ul id="camera-menu" class="menu" role="menu" hidden></ul>
+              <ul id="camera-menu" class="menu apple-menu" role="menu" hidden></ul>
             </div>
           </div>
 
-          <div id="camera-live" hidden>
-            <div class="live-badge"><span class="dot"></span> No ar</div>
-            <video id="camera-preview" muted playsinline></video>
-            <div class="stats">
+          <!-- Estado Ao Vivo da Câmera -->
+          <div id="camera-live" class="live-container" hidden>
+            <div class="video-preview-wrapper camera-preview-wrapper">
+              <div class="video-live-badge"><span class="dot"></span> No ar</div>
+              <video id="camera-preview" muted playsinline></video>
+              <div class="camera-floating-action">
+                <button id="camera-stop" class="danger pill-button pill-button-danger-sm">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor"></rect>
+                  </svg>
+                  Desligar câmera
+                </button>
+              </div>
+            </div>
+
+            <!-- Métricas e watchers da câmera (preservados para o JS) -->
+            <div class="stats camera-stats-hidden" hidden>
               <div><strong id="camera-viewers">0</strong><span>assistindo</span></div>
               <div><strong id="camera-fps">—</strong><span>quadros</span></div>
               <div><strong id="camera-bitrate">—</strong><span>enviando</span></div>
@@ -136,30 +340,71 @@
               <div class="watchers-title">Assistindo agora</div>
               <div id="camera-watchers-list" class="watchers-list"></div>
             </div>
-
-            <button id="camera-stop" class="danger">Desligar a câmera</button>
           </div>
 
           <p id="camera-status" class="status" role="status"></p>
         </section>
-      </div>
+      </main>
 
-      <footer>
-        <p>
+      <!-- Rodapé Apple Minimalista -->
+      <footer class="apple-footer">
+        <p class="footer-hint">
           Mantenha esta aba aberta enquanto transmite. Você pode voltar para o Discord — a
           transmissão continua.
         </p>
         <p class="credits">Modificações por Onederson</p>
       </footer>
-    </main>
+    </div>
 
+    <!-- Modal Trocar Tela Overlay -->
     <div id="overlay-trocar-tela" class="overlay-trocar-tela" hidden>
-      <div class="overlay-content">
+      <div class="overlay-content apple-modal">
+        <div class="modal-icon-wrap">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"></polyline>
+            <line x1="4" y1="20" x2="21" y2="3"></line>
+            <polyline points="21 16 21 21 16 21"></polyline>
+            <line x1="15" y1="15" x2="21" y2="21"></line>
+            <line x1="4" y1="4" x2="9" y2="9"></line>
+          </svg>
+        </div>
         <h2>Clique em qualquer lugar para trocar de tela</h2>
         <p>A transmissão atual continuará no ar até você selecionar a nova janela ou tela.</p>
       </div>
     </div>
 
-    <script type="module" src="/share.js?v=50"></script>
+    <!-- Script de Gestão do Tema (Light / Dark) -->
+    <script>
+      (function () {
+        const doc = document.documentElement;
+        const btnLight = document.getElementById('theme-light');
+        const btnDark = document.getElementById('theme-dark');
+
+        function aplicarTema(tema) {
+          doc.setAttribute('data-theme', tema);
+          try {
+            localStorage.setItem('apple_theme', tema);
+          } catch {}
+
+          const isDark = tema === 'dark';
+          if (btnDark) {
+            btnDark.classList.toggle('active', isDark);
+            btnDark.setAttribute('aria-checked', String(isDark));
+          }
+          if (btnLight) {
+            btnLight.classList.toggle('active', !isDark);
+            btnLight.setAttribute('aria-checked', String(!isDark));
+          }
+        }
+
+        const temaAtual = doc.getAttribute('data-theme') || 'dark';
+        aplicarTema(temaAtual);
+
+        btnLight?.addEventListener('click', () => aplicarTema('light'));
+        btnDark?.addEventListener('click', () => aplicarTema('dark'));
+      })();
+    </script>
+
+    <script type="module" src="/share.js?v=52"></script>
   </body>
 </html>
