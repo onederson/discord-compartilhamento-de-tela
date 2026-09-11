@@ -278,6 +278,24 @@ describe('duas fontes', () => {
       message: expect.stringMatching(/já está transmitindo a tela/),
     });
   });
+
+  it('permite substituir transmissão ativa via parâmetro substituir=1', async () => {
+    const room = novaSala();
+    const ws1 = await conectar(tokenDe(room.id, 'broadcaster', 'u-sub'), '/ws', { fonte: 'tela' });
+    ws1.on('error', () => {});
+    await ate(ws1, doTipo('slot'), 'o primeiro slot');
+    ws1.send(JSON.stringify({ type: 'start' }));
+
+    const ws2 = await conectar(tokenDe(room.id, 'broadcaster', 'u-sub'), '/ws', {
+      fonte: 'tela',
+      substituir: '1',
+    });
+    ws2.on('error', () => {});
+    const slot2 = await ate(ws2, doTipo('slot'), 'o segundo slot');
+    expect(slot2.slot).toBe(0);
+
+    ws2.send(JSON.stringify({ type: 'start' }));
+  });
 });
 
 describe('aba de captura', () => {

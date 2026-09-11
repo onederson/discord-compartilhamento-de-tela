@@ -335,6 +335,25 @@ body {
   box-shadow: 0 0 16px rgba(48, 209, 88, 0.15);
 }
 
+.status-offline-pill {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--apple-text-secondary);
+  box-shadow: none;
+}
+
+[data-theme='light'] .status-offline-pill {
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  color: var(--apple-text-secondary);
+}
+
+.status-offline-pill .dot {
+  background: var(--apple-text-tertiary);
+  box-shadow: none;
+  animation: none;
+}
+
 .dot {
   width: 7px;
   height: 7px;

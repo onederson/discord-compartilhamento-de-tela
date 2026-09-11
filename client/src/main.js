@@ -2237,10 +2237,7 @@ function trazerAba(fonte, { acao = null } = {}) {
 
   ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
 
-  const rotulo =
-    fonte === 'camera'
-      ? 'ligar a câmera'
-      : 'compartilhar a tela';
+  const rotulo = fonte === 'camera' ? 'ligar a câmera' : 'compartilhar a tela';
 
   toast(`Trazendo o navegador para a frente para ${rotulo}…`);
 

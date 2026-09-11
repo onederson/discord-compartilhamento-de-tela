@@ -618,7 +618,9 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela', substituir = f
         antigoWs.__substituido = true;
         try {
           antigoWs.close(4001, 'substituido');
-        } catch {}
+        } catch {
+          // O websocket antigo pode já estar fechado ou inacessível.
+        }
       }
       entry.ws = ws;
       entry.__substituido = true;

@@ -1174,7 +1174,13 @@ wss.on('connection', (ws, _req, auth, fonte, controle, substituir) => {
   if (auth.role === 'broadcaster' && controle) {
     handleControl(ws, room, auth);
   } else if (auth.role === 'broadcaster') {
-    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte, Boolean(substituir));
+    handleBroadcaster(
+      ws,
+      room,
+      { id: auth.uid, name: auth.name, avatar: auth.av ?? null },
+      fonte,
+      Boolean(substituir),
+    );
   } else {
     handleViewer(ws, room, auth);
   }
@@ -1296,7 +1302,9 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
     if (msg.type === 'start') {
       if (entry.__substituido) {
         R.replaceStream(room, entry);
-        logDev(`[room ${room.id}] stream substituída (hot-swap) por ${info.name} no slot ${entry.slot}`);
+        logDev(
+          `[room ${room.id}] stream substituída (hot-swap) por ${info.name} no slot ${entry.slot}`,
+        );
       } else {
         R.startStream(room, entry);
         logDev(`[room ${room.id}] stream iniciada por ${info.name}`);
