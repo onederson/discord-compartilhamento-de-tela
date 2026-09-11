@@ -605,12 +605,27 @@ function freeSlot(room) {
 }
 
 /** Retorna a entry criada, ou uma string com o motivo da recusa. */
-export function attachBroadcaster(room, ws, info, fonte = 'tela') {
+export function attachBroadcaster(room, ws, info, fonte = 'tela', substituir = false) {
   const chave = chaveDe(info.id, fonte);
 
   // A recusa nomeia a fonte: "você já está transmitindo" era claro quando só
   // havia uma, mas com duas deixaria a pessoa sem saber qual delas repetiu.
   if (room.broadcasters.has(chave)) {
+    if (substituir) {
+      const entry = room.broadcasters.get(chave);
+      const antigoWs = entry.ws;
+      if (antigoWs && antigoWs !== ws) {
+        antigoWs.__substituido = true;
+        try {
+          antigoWs.close(4001, 'substituido');
+        } catch {}
+      }
+      entry.ws = ws;
+      entry.__substituido = true;
+      ws.__entry = entry;
+      sendJson(ws, { type: 'slot', slot: entry.slot });
+      return entry;
+    }
     return fonte === 'camera'
       ? 'Você já está transmitindo a câmera nesta sala.'
       : 'Você já está transmitindo a tela nesta sala.';
@@ -668,6 +683,21 @@ export function startStream(room, entry) {
     userId: entry.info.id,
     fonte: entry.fonte,
   });
+  broadcastState(room);
+}
+
+/** Substitui a stream mantendo espectadores conectados sem reiniciar a transmissão. */
+export function replaceStream(room, entry) {
+  entry.streaming = true;
+  entry.startedAt = Date.now();
+  entry.config = null;
+  entry.audioConfig = null;
+  entry.__substituido = false;
+  // Mantém v.__watching intacto para os espectadores não precisarem reclicar em assistir.
+  // Apenas zera v.__primed para que o novo keyframe inicialize o decoder imediatamente.
+  for (const v of room.viewers) {
+    v.__primed?.delete(entry.slot);
+  }
   broadcastState(room);
 }
 
@@ -803,6 +833,7 @@ export function stopStream(room, entry) {
 export function detachBroadcaster(room, ws) {
   const entry = ws.__entry;
   if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
+  if (ws.__substituido || entry.ws !== ws) return;
 
   stopStream(room, entry);
   room.broadcasters.delete(entry.chave);

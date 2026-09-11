@@ -145,7 +145,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <polygon points="5 3 19 12 5 21 5 3"></polygon>
                 </svg>
-                Escolher janela ou tela
+                <span id="tela-start-text">Escolher janela ou tela</span>
               </button>
               <button
                 id="tela-escolher"
@@ -154,6 +154,14 @@
                 aria-label="Ver prévia antes de transmitir"
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+              </button>
+              <button
+                id="tela-cancelar-troca"
+                class="secondary pill-button"
+                type="button"
+                hidden
+              >
+                Cancelar troca
               </button>
             </div>
           </div>
@@ -354,23 +362,6 @@
         </p>
         <p class="credits">Modificações por Onederson</p>
       </footer>
-    </div>
-
-    <!-- Modal Trocar Tela Overlay -->
-    <div id="overlay-trocar-tela" class="overlay-trocar-tela" hidden>
-      <div class="overlay-content apple-modal">
-        <div class="modal-icon-wrap">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 3 21 3 21 8"></polyline>
-            <line x1="4" y1="20" x2="21" y2="3"></line>
-            <polyline points="21 16 21 21 16 21"></polyline>
-            <line x1="15" y1="15" x2="21" y2="21"></line>
-            <line x1="4" y1="4" x2="9" y2="9"></line>
-          </svg>
-        </div>
-        <h2>Clique em qualquer lugar para trocar de tela</h2>
-        <p>A transmissão atual continuará no ar até você selecionar a nova janela ou tela.</p>
-      </div>
     </div>
 
     <!-- Script de Gestão do Tema (Light / Dark) -->
