@@ -115,7 +115,9 @@ try {
       if (query.get('troca') !== '1') {
         try {
           window.close();
-        } catch {}
+        } catch {
+          /* a janela pode ter sido aberta pelo usuário ou o fechamento bloqueado pelo navegador */
+        }
       }
       return;
     }
@@ -671,7 +673,9 @@ function criarPainel(fonte) {
         if (reason === 'Transmissão substituída pela nova aba.') {
           try {
             window.close();
-          } catch {}
+          } catch {
+            /* navegador pode impedir fechar aba que não foi aberta por script */
+          }
           setStatus(
             'Transmissão transferida com sucesso para a nova aba. Você já pode fechar esta aba.',
             'ok',
@@ -714,7 +718,9 @@ function criarPainel(fonte) {
           const bc = new BroadcastChannel('discord-screenshare-focus');
           bc.postMessage({ type: 'substituicao-concluida' });
           bc.close();
-        } catch {}
+        } catch {
+          /* canal pode já estar fechado */
+        }
       }
       atualizarStatusGlobal();
     } catch (err) {
@@ -863,8 +869,9 @@ if (!payload) {
     const btnCancel = $('tela-cancelar-troca');
 
     if (titleEl) titleEl.textContent = 'Trocar de tela ou janela';
-    if (subEl) subEl.textContent =
-      'A transmissão anterior continuará no ar até você confirmar a nova seleção.';
+    if (subEl)
+      subEl.textContent =
+        'A transmissão anterior continuará no ar até você confirmar a nova seleção.';
     if (btnText) btnText.textContent = 'Escolher nova tela ou janela';
     if (btnCancel) {
       btnCancel.hidden = false;

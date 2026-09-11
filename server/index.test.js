@@ -182,6 +182,30 @@ describe('prefixo /.proxy da Activity', () => {
   });
 });
 
+describe('/focar', () => {
+  it('serve a página de instrução com título padrão', async () => {
+    const resp = await get('/focar');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Trocando de tela…');
+    expect(html).toContain('Transmitir');
+  });
+
+  it('serve a página com título para câmera quando fonte=camera', async () => {
+    const resp = await get('/focar?fonte=camera');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Ligando a câmera…');
+  });
+
+  it('serve a página com título de tela quando fonte=tela', async () => {
+    const resp = await get('/focar?fonte=tela');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Compartilhando a tela…');
+  });
+});
+
 describe('/api/session-dev', () => {
   it('emite identidade com a instância pedida', async () => {
     const corpo = await identidade({ name: 'Alice' });
