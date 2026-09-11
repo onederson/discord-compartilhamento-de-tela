@@ -769,6 +769,7 @@ app.get('/focar', (req, res) => {
   <meta charset="utf-8">
   <title>${tituloInicial}</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       background: #1e1f22;
@@ -792,6 +793,21 @@ app.get('/focar', (req, res) => {
     h2 { margin: 0 0 10px; font-size: 19px; font-weight: 600; }
     p { margin: 0 0 12px; color: #949ba4; font-size: 14px; line-height: 1.5; }
     .destaque { color: #f2f3f5; font-weight: 500; }
+    .dica {
+      margin-top: 16px;
+      padding: 10px 14px;
+      background: rgba(88, 101, 242, 0.12);
+      border: 1px solid rgba(88, 101, 242, 0.25);
+      border-radius: 8px;
+      color: #c9cdfb;
+      font-size: 13px;
+    }
+    .sucesso {
+      display: none;
+      color: #3ba55d;
+      font-weight: 600;
+      margin-top: 14px;
+    }
     button {
       background: #4e5058;
       color: #fff;
@@ -808,17 +824,20 @@ app.get('/focar', (req, res) => {
   </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="card">
     <div class="icon">📺</div>
     <h2>${tituloInicial}</h2>
     <p>O navegador foi trazido para a frente!</p>
-    <p class="destaque">
-      👉 Clique na aba <b>Transmitir</b> (com a bolinha vermelha 🔴) para escolher a nova janela ou tela.
+    <p class="destaque" id="instrucao">
+      👉 Clique na aba <b>Transmitir</b> na barra de abas acima para escolher a nova janela ou tela.
     </p>
-    <button onclick="fechar()">Fechar esta guia</button>
+    <div class="dica">
+      💡 Dica: procure a aba com o ícone 🔴 ou título <b>Transmitir</b>.
+    </div>
+    <p class="sucesso" id="sucesso">✅ Tela trocada com sucesso! Fechando esta guia…</p>
+    <button onclick="fechar()" id="btnFechar">Fechar esta guia</button>
   </div>
   <script>
-    // Identificador da janela de captura: discord-screen-captura
     const params = new URLSearchParams(location.search);
     const fonte = params.get('fonte');
     const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
@@ -832,21 +851,28 @@ app.get('/focar', (req, res) => {
     }
 
     function fechar() {
-      avisarAbaAlvo();
-      try {
-        window.close();
-      } catch {}
+      try { window.close(); } catch {}
     }
 
-    // Avisa imediatamente a aba de transmissão via BroadcastChannel
+    // Avisa a aba de transmissão via BroadcastChannel
     avisarAbaAlvo();
 
-    // Tenta fechar automaticamente caso o navegador autorize
-    setTimeout(() => {
-      try {
-        window.close();
-      } catch {}
-    }, 450);
+    // Escuta a confirmação da aba de transmissão: quando a troca for
+    // concluída com sucesso, esta guia se fecha automaticamente.
+    try {
+      const retornoBc = new BroadcastChannel('discord-screenshare-focus');
+      retornoBc.addEventListener('message', (e) => {
+        if (e.data?.type === 'troca-completa') {
+          document.getElementById('instrucao').style.display = 'none';
+          document.getElementById('sucesso').style.display = 'block';
+          document.getElementById('btnFechar').textContent = 'Fechando…';
+          setTimeout(fechar, 600);
+        }
+      });
+    } catch {}
+
+    // NÃO fecha automaticamente — fechar esta aba faz o Chrome ativar a aba
+    // adjacente em vez da aba de transmissão, causando o bug de foco errado.
   </script>
 </body>
 </html>`);

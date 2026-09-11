@@ -714,6 +714,11 @@ function criarPainel(fonte) {
       try {
         await broadcaster.changeScreen();
         setStatus('Tela alterada com sucesso.');
+        try {
+          const bc = new BroadcastChannel('discord-screenshare-focus');
+          bc.postMessage({ type: 'troca-completa' });
+          bc.close();
+        } catch {}
       } catch (err) {
         if (err.name !== 'NotAllowedError') {
           setStatus(`Erro ao trocar tela: ${err.message}`, 'error');
@@ -798,12 +803,21 @@ function solicitarTrocaDeTela(painel) {
     if (overlay) overlay.hidden = true;
   };
 
+  const notificarTrocaCompleta = () => {
+    try {
+      const bc = new BroadcastChannel('discord-screenshare-focus');
+      bc.postMessage({ type: 'troca-completa' });
+      bc.close();
+    } catch {}
+  };
+
   const executarTroca = () => {
     esconderOverlay();
     painel.trocarTela()
       ?.then(() => {
         esconderOverlay();
         painel.setStatus('Tela alterada com sucesso.', 'ok');
+        notificarTrocaCompleta();
       })
       ?.catch((err) => {
         esconderOverlay();
@@ -857,6 +871,7 @@ function solicitarTrocaDeTela(painel) {
         .then(() => {
           esconderOverlay();
           painel.setStatus('Tela alterada com sucesso.', 'ok');
+          notificarTrocaCompleta();
         })
         .catch((err) => {
           if (err?.name === 'NotAllowedError' || err?.name === 'InvalidStateError') {
