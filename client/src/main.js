@@ -2221,17 +2221,26 @@ function ligarFonte(fonte) {
  */
 function trazerAba(fonte, { acao = null } = {}) {
   if (acao === 'trocar-tela') {
-    ws?.send(JSON.stringify({ type: 'change-screen-broadcast' }));
-  } else {
-    ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+    const url = urlDaCaptura(fonte);
+    url.searchParams.set('troca', '1');
+
+    toast('Abrindo o navegador para trocar de tela… A transmissão atual continua no ar.');
+
+    if (inDiscord) {
+      sdk?.commands?.openExternalLink({ url: url.toString() })?.catch(() => {});
+      return;
+    }
+
+    window.open(url.toString(), '_blank');
+    return;
   }
 
+  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+
   const rotulo =
-    acao === 'trocar-tela'
-      ? 'trocar a tela'
-      : fonte === 'camera'
-        ? 'ligar a câmera'
-        : 'compartilhar a tela';
+    fonte === 'camera'
+      ? 'ligar a câmera'
+      : 'compartilhar a tela';
 
   toast(`Trazendo o navegador para a frente para ${rotulo}…`);
 

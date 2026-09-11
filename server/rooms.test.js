@@ -34,6 +34,12 @@ function socket({ aberto = true, buffered = 0 } = {}) {
       this.enviados.length = 0;
       return this;
     },
+    close(code, reason) {
+      this.closed = true;
+      this.closeCode = code;
+      this.closeReason = reason;
+      this.readyState = 3;
+    },
   };
 }
 
@@ -339,11 +345,37 @@ describe('attachBroadcaster', () => {
     expect(viewer.tipos()).toContain('state');
   });
 
-  it('recusa a mesma pessoa transmitindo duas vezes', () => {
+  it('recusa a mesma pessoa transmitindo duas vezes sem a flag substituir', () => {
     const { room } = salaComEspectador();
     R.attachBroadcaster(room, socket(), pessoa('t1'));
 
     expect(R.attachBroadcaster(room, socket(), pessoa('t1'))).toMatch(/já está transmitindo/);
+  });
+
+  it('permite a mesma pessoa substituir a transmissão existente (hot swap)', () => {
+    const { room, viewer } = salaComEspectador();
+    const ws1 = socket();
+    const entry1 = R.attachBroadcaster(room, ws1, pessoa('t1'));
+    R.startStream(room, entry1);
+    R.watch(room, viewer, entry1.slot);
+    expect(viewer.__watching.has(entry1.slot)).toBe(true);
+
+    const ws2 = socket();
+    const entry2 = R.attachBroadcaster(room, ws2, pessoa('t1'), 'tela', true);
+
+    expect(entry2).toBe(entry1);
+    expect(entry2.slot).toBe(0);
+    expect(ws1.closed).toBe(true);
+    expect(ws1.closeCode).toBe(4001);
+    expect(ws2.mensagens()).toContainEqual({ type: 'slot', slot: 0 });
+
+    // Desconectar o ws antigo não derruba o broadcaster novo
+    R.detachBroadcaster(room, ws1);
+    expect(room.broadcasters.has(entry1.chave)).toBe(true);
+
+    // replaceStream mantém os espectadores assistindo
+    R.replaceStream(room, entry2);
+    expect(viewer.__watching.has(entry1.slot)).toBe(true);
   });
 
   it('recusa a quinta transmissão simultânea', () => {

@@ -1151,13 +1151,14 @@ server.on('upgrade', (req, socket, head) => {
   const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
   // A aba de captura abre esta conexão ao carregar, antes de qualquer captura.
   const controle = url.searchParams.get('modo') === 'controle';
+  const substituir = url.searchParams.get('substituir') === '1';
 
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, payload, fonte, controle);
+    wss.emit('connection', ws, req, payload, fonte, controle, substituir);
   });
 });
 
-wss.on('connection', (ws, _req, auth, fonte, controle) => {
+wss.on('connection', (ws, _req, auth, fonte, controle, substituir) => {
   ws.__connectedAt = Date.now();
   ws.__rttMs = null;
   ws.__pingSentAt = null;
@@ -1173,7 +1174,7 @@ wss.on('connection', (ws, _req, auth, fonte, controle) => {
   if (auth.role === 'broadcaster' && controle) {
     handleControl(ws, room, auth);
   } else if (auth.role === 'broadcaster') {
-    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte);
+    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte, Boolean(substituir));
   } else {
     handleViewer(ws, room, auth);
   }
@@ -1201,8 +1202,8 @@ function handleControl(ws, room, auth) {
   ws.on('error', sair);
 }
 
-function handleBroadcaster(ws, room, info, fonte) {
-  const entry = R.attachBroadcaster(room, ws, info, fonte);
+function handleBroadcaster(ws, room, info, fonte, substituir = false) {
+  const entry = R.attachBroadcaster(room, ws, info, fonte, substituir);
 
   if (typeof entry === 'string') {
     R.sendJson(ws, { type: 'error', message: entry });
@@ -1293,8 +1294,13 @@ function handleBroadcaster(ws, room, info, fonte) {
     if (msg.type === 'ping') return;
 
     if (msg.type === 'start') {
-      R.startStream(room, entry);
-      logDev(`[room ${room.id}] stream iniciada por ${info.name}`);
+      if (entry.__substituido) {
+        R.replaceStream(room, entry);
+        logDev(`[room ${room.id}] stream substituída (hot-swap) por ${info.name} no slot ${entry.slot}`);
+      } else {
+        R.startStream(room, entry);
+        logDev(`[room ${room.id}] stream iniciada por ${info.name}`);
+      }
     } else if (msg.type === 'config' && msg.config) {
       R.setConfig(room, entry, msg.config);
       logDev(`[room ${room.id}] codec de ${info.name}: ${msg.config.codec}`);

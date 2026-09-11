@@ -96,13 +96,22 @@ try {
       return;
     }
 
+    if (data.type === 'substituicao-concluida' || data.type === 'troca-completa') {
+      if (query.get('troca') !== '1') {
+        try {
+          window.close();
+        } catch {}
+      }
+      return;
+    }
+
     if (data.type === 'trocar-tela' || (data.type === 'focar' && data.acao === 'trocar-tela')) {
       window.name = 'discord-screen-captura';
       window.focus();
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        solicitarTrocaDeTela(painel);
+        painel.trocarTela();
       }
       return;
     }
@@ -331,7 +340,7 @@ function ligarControle() {
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        solicitarTrocaDeTela(painel);
+        painel.trocarTela();
       }
 
       if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
@@ -556,9 +565,11 @@ function criarPainel(fonte) {
     setStatus(camera ? 'Aguardando a permissão da câmera…' : 'Aguardando você escolher a tela…');
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const isTroca = query.get('troca') === '1';
+    const wsUrl = `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}${isTroca ? '&substituir=1' : ''}`;
 
     broadcaster = createBroadcaster({
-      wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}`,
+      wsUrl,
       bitrate: opcoes.bitrate,
       fps: opcoes.fps,
       audio: !camera,
@@ -642,6 +653,15 @@ function criarPainel(fonte) {
         if (fonte === 'tela') $('tela-recovery').hidden = true;
         mostrarSetup();
         setStatus(reason);
+        if (reason === 'Transmissão substituída pela nova aba.') {
+          try {
+            window.close();
+          } catch {}
+          setStatus(
+            'Transmissão transferida com sucesso para a nova aba. Você já pode fechar esta aba.',
+            'ok',
+          );
+        }
       },
       onTrackEnded: () => {
         if (fonte === 'tela') {
@@ -673,6 +693,13 @@ function criarPainel(fonte) {
       // a saída fica à mão desde o início, em vez de só depois de um aviso.
       if (!camera) $('somAba').hidden = false;
       chamar(null);
+      if (isTroca) {
+        try {
+          const bc = new BroadcastChannel('discord-screenshare-focus');
+          bc.postMessage({ type: 'substituicao-concluida' });
+          bc.close();
+        } catch {}
+      }
     } catch (err) {
       broadcaster = null;
       el('start').disabled = false;
@@ -709,16 +736,9 @@ function criarPainel(fonte) {
   if (!camera) {
     $('tela-change')?.addEventListener('click', async () => {
       if (!broadcaster) return;
-      const overlay = $('overlay-trocar-tela');
-      if (overlay) overlay.hidden = true;
       try {
         await broadcaster.changeScreen();
         setStatus('Tela alterada com sucesso.');
-        try {
-          const bc = new BroadcastChannel('discord-screenshare-focus');
-          bc.postMessage({ type: 'troca-completa' });
-          bc.close();
-        } catch {}
       } catch (err) {
         if (err.name !== 'NotAllowedError') {
           setStatus(`Erro ao trocar tela: ${err.message}`, 'error');
@@ -786,117 +806,6 @@ function criarPainel(fonte) {
   };
 }
 
-let ultimaSolicitacaoTroca = 0;
-let aguardandoVisibilidadeParaTroca = false;
-
-function solicitarTrocaDeTela(painel) {
-  const agora = Date.now();
-  // Evita disparos duplicados em cascata (WebSocket + BroadcastChannel)
-  if (agora - ultimaSolicitacaoTroca < 1500) {
-    return;
-  }
-  ultimaSolicitacaoTroca = agora;
-
-  const overlay = $('overlay-trocar-tela');
-
-  const esconderOverlay = () => {
-    if (overlay) overlay.hidden = true;
-  };
-
-  const notificarTrocaCompleta = () => {
-    try {
-      const bc = new BroadcastChannel('discord-screenshare-focus');
-      bc.postMessage({ type: 'troca-completa' });
-      bc.close();
-    } catch {}
-  };
-
-  const executarTroca = () => {
-    esconderOverlay();
-    painel.trocarTela()
-      ?.then(() => {
-        esconderOverlay();
-        painel.setStatus('Tela alterada com sucesso.', 'ok');
-        notificarTrocaCompleta();
-      })
-      ?.catch((err) => {
-        esconderOverlay();
-        if (err?.name === 'NotAllowedError') {
-          painel.setStatus('Troca de tela cancelada.', 'aviso');
-        } else {
-          painel.setStatus(`Erro ao trocar tela: ${err?.message || err}`, 'error');
-        }
-      });
-  };
-
-  const exibirOverlay = () => {
-    if (overlay) {
-      overlay.hidden = false;
-      overlay.onclick = () => {
-        executarTroca();
-      };
-    } else {
-      painel.setStatus(
-        'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-        'aviso',
-      );
-    }
-  };
-
-  // Se a aba estiver em segundo plano (document.hidden), tentar getDisplayMedia()
-  // é certeza de NotAllowedError automático pelo navegador (falta de user gesture na aba).
-  // Aguardamos o usuário focar a aba para exibir o aviso/overlay limpo.
-  if (document.hidden) {
-    if (!aguardandoVisibilidadeParaTroca) {
-      aguardandoVisibilidadeParaTroca = true;
-      const aoFicarVisivel = () => {
-        if (!document.hidden) {
-          aguardandoVisibilidadeParaTroca = false;
-          document.removeEventListener('visibilitychange', aoFicarVisivel);
-          window.removeEventListener('focus', aoFicarVisivel);
-          exibirOverlay();
-        }
-      };
-      document.addEventListener('visibilitychange', aoFicarVisivel);
-      window.addEventListener('focus', aoFicarVisivel);
-    }
-    return;
-  }
-
-  // Se a aba já estiver visível:
-  try {
-    const promise = painel.trocarTela();
-    if (promise) {
-      promise
-        .then(() => {
-          esconderOverlay();
-          painel.setStatus('Tela alterada com sucesso.', 'ok');
-          notificarTrocaCompleta();
-        })
-        .catch((err) => {
-          if (err?.name === 'NotAllowedError' || err?.name === 'InvalidStateError') {
-            // Se falhou porque o navegador exigiu clique no documento:
-            exibirOverlay();
-          } else {
-            esconderOverlay();
-            painel.setStatus(`Erro: ${err?.message || err}`, 'error');
-          }
-        });
-    } else {
-      exibirOverlay();
-    }
-  } catch {
-    exibirOverlay();
-  }
-}
-
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    const overlay = $('overlay-trocar-tela');
-    if (overlay && !overlay.hidden) overlay.hidden = true;
-  }
-});
-
 // ------------------------------------------------------------------ arranque
 
 const payload = token && readTokenPayload();
@@ -928,6 +837,28 @@ if (!payload) {
   // acabou de abrir em segundo plano deixaria o pedido preso sem ninguém ver.
   const pedida = query.get('fonte');
   if (FONTES.includes(pedida)) atenderPedido(pedida);
+
+  if (query.get('troca') === '1') {
+    const titleEl = document.querySelector('#tela-setup .empty-title');
+    const subEl = document.querySelector('#tela-setup .empty-subtitle');
+    const btnText = $('tela-start-text');
+    const btnCancel = $('tela-cancelar-troca');
+
+    if (titleEl) titleEl.textContent = 'Trocar de tela ou janela';
+    if (subEl) subEl.textContent =
+      'A transmissão anterior continuará no ar até você confirmar a nova seleção.';
+    if (btnText) btnText.textContent = 'Escolher nova tela ou janela';
+    if (btnCancel) {
+      btnCancel.hidden = false;
+      btnCancel.addEventListener('click', () => {
+        window.close();
+      });
+    }
+    paineis.tela?.setStatus(
+      'A transmissão atual continua no ar. Clique no botão acima para selecionar a nova tela.',
+      'aviso',
+    );
+  }
 }
 
 // Mantém o vídeo como está e troca só de onde vem o som — as fontes que não
