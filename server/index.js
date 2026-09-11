@@ -769,6 +769,7 @@ app.get('/focar', (req, res) => {
   <meta charset="utf-8">
   <title>${tituloInicial}</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       margin: 0;
       background: #1e1f22;
@@ -782,70 +783,96 @@ app.get('/focar', (req, res) => {
     }
     .card {
       background: #2b2d31;
-      padding: 24px 32px;
-      border-radius: 12px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
-      max-width: 380px;
+      padding: 28px 32px;
+      border-radius: 14px;
+      box-shadow: 0 12px 32px rgba(0,0,0,0.5);
+      max-width: 420px;
+      border: 1px solid rgba(255,255,255,0.08);
     }
-    h2 { margin: 0 0 8px; font-size: 18px; }
-    p { margin: 0 0 16px; color: #949ba4; font-size: 14px; line-height: 1.4; }
+    .icon { font-size: 32px; margin-bottom: 12px; }
+    h2 { margin: 0 0 10px; font-size: 19px; font-weight: 600; }
+    p { margin: 0 0 12px; color: #949ba4; font-size: 14px; line-height: 1.5; }
+    .destaque { color: #f2f3f5; font-weight: 500; }
+    .dica {
+      margin-top: 16px;
+      padding: 10px 14px;
+      background: rgba(88, 101, 242, 0.12);
+      border: 1px solid rgba(88, 101, 242, 0.25);
+      border-radius: 8px;
+      color: #c9cdfb;
+      font-size: 13px;
+    }
+    .sucesso {
+      display: none;
+      color: #3ba55d;
+      font-weight: 600;
+      margin-top: 14px;
+    }
     button {
-      background: #5865f2;
+      background: #4e5058;
       color: #fff;
       border: none;
-      padding: 10px 20px;
-      border-radius: 6px;
+      padding: 10px 22px;
+      border-radius: 8px;
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
+      margin-top: 14px;
+      transition: background 0.15s;
     }
-    button:hover { background: #4752c4; }
+    button:hover { background: #6d6f78; }
   </style>
 </head>
 <body>
-  <div class="card">
+  <div class="card" id="card">
+    <div class="icon">📺</div>
     <h2>${tituloInicial}</h2>
-    <p>O navegador foi trazido para a frente! Se esta guia não fechar sozinha, clique abaixo para ir para a transmissão.</p>
-    <button onclick="focarEFaixar()">Ir para a transmissão</button>
+    <p>O navegador foi trazido para a frente!</p>
+    <p class="destaque" id="instrucao">
+      👉 Clique na aba <b>Transmitir</b> na barra de abas acima para escolher a nova janela ou tela.
+    </p>
+    <div class="dica">
+      💡 Dica: procure a aba com o ícone 🔴 ou título <b>Transmitir</b>.
+    </div>
+    <p class="sucesso" id="sucesso">✅ Tela trocada com sucesso! Fechando esta guia…</p>
+    <button onclick="fechar()" id="btnFechar">Fechar esta guia</button>
   </div>
   <script>
     const params = new URLSearchParams(location.search);
     const fonte = params.get('fonte');
     const acao = params.get('acao') || (fonte === 'camera' ? 'camera' : fonte === 'tela' ? 'tela' : 'trocar-tela');
 
-    let disparado = false;
-
-    function focarEFaixar() {
-      if (disparado) return;
-      disparado = true;
-
-      let focou = false;
-      try {
-        const w = window.open('', 'discord-screen-captura');
-        if (w && w !== window) {
-          w.focus();
-          focou = true;
-        }
-      } catch {}
-
+    function avisarAbaAlvo() {
       try {
         const bc = new BroadcastChannel('discord-screenshare-focus');
         bc.postMessage({ type: acao === 'trocar-tela' ? 'trocar-tela' : 'focar', fonte, acao });
         bc.close();
       } catch {}
-
-      // Aguarda o navegador efetivar o foco na aba discord-screen-captura
-      // antes de fechar esta guia. Fechamento instantâneo síncrono faz o
-      // Chrome restaurar a aba anterior (ex: Google).
-      setTimeout(() => {
-        try {
-          window.open('', '_self');
-          window.close();
-        } catch {}
-      }, 350);
     }
 
-    focarEFaixar();
+    function fechar() {
+      try { window.close(); } catch {}
+    }
+
+    // Avisa a aba de transmissão via BroadcastChannel
+    avisarAbaAlvo();
+
+    // Escuta a confirmação da aba de transmissão: quando a troca for
+    // concluída com sucesso, esta guia se fecha automaticamente.
+    try {
+      const retornoBc = new BroadcastChannel('discord-screenshare-focus');
+      retornoBc.addEventListener('message', (e) => {
+        if (e.data?.type === 'troca-completa') {
+          document.getElementById('instrucao').style.display = 'none';
+          document.getElementById('sucesso').style.display = 'block';
+          document.getElementById('btnFechar').textContent = 'Fechando…';
+          setTimeout(fechar, 600);
+        }
+      });
+    } catch {}
+
+    // NÃO fecha automaticamente — fechar esta aba faz o Chrome ativar a aba
+    // adjacente em vez da aba de transmissão, causando o bug de foco errado.
   </script>
 </body>
 </html>`);
@@ -1124,13 +1151,14 @@ server.on('upgrade', (req, socket, head) => {
   const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
   // A aba de captura abre esta conexão ao carregar, antes de qualquer captura.
   const controle = url.searchParams.get('modo') === 'controle';
+  const substituir = url.searchParams.get('substituir') === '1';
 
   wss.handleUpgrade(req, socket, head, (ws) => {
-    wss.emit('connection', ws, req, payload, fonte, controle);
+    wss.emit('connection', ws, req, payload, fonte, controle, substituir);
   });
 });
 
-wss.on('connection', (ws, _req, auth, fonte, controle) => {
+wss.on('connection', (ws, _req, auth, fonte, controle, substituir) => {
   ws.__connectedAt = Date.now();
   ws.__rttMs = null;
   ws.__pingSentAt = null;
@@ -1146,7 +1174,7 @@ wss.on('connection', (ws, _req, auth, fonte, controle) => {
   if (auth.role === 'broadcaster' && controle) {
     handleControl(ws, room, auth);
   } else if (auth.role === 'broadcaster') {
-    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte);
+    handleBroadcaster(ws, room, { id: auth.uid, name: auth.name, avatar: auth.av ?? null }, fonte, Boolean(substituir));
   } else {
     handleViewer(ws, room, auth);
   }
@@ -1174,8 +1202,8 @@ function handleControl(ws, room, auth) {
   ws.on('error', sair);
 }
 
-function handleBroadcaster(ws, room, info, fonte) {
-  const entry = R.attachBroadcaster(room, ws, info, fonte);
+function handleBroadcaster(ws, room, info, fonte, substituir = false) {
+  const entry = R.attachBroadcaster(room, ws, info, fonte, substituir);
 
   if (typeof entry === 'string') {
     R.sendJson(ws, { type: 'error', message: entry });
@@ -1266,8 +1294,13 @@ function handleBroadcaster(ws, room, info, fonte) {
     if (msg.type === 'ping') return;
 
     if (msg.type === 'start') {
-      R.startStream(room, entry);
-      logDev(`[room ${room.id}] stream iniciada por ${info.name}`);
+      if (entry.__substituido) {
+        R.replaceStream(room, entry);
+        logDev(`[room ${room.id}] stream substituída (hot-swap) por ${info.name} no slot ${entry.slot}`);
+      } else {
+        R.startStream(room, entry);
+        logDev(`[room ${room.id}] stream iniciada por ${info.name}`);
+      }
     } else if (msg.type === 'config' && msg.config) {
       R.setConfig(room, entry, msg.config);
       logDev(`[room ${room.id}] codec de ${info.name}: ${msg.config.codec}`);

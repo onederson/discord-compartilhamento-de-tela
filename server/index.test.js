@@ -127,8 +127,8 @@ describe('cabeçalhos', () => {
     expect(resposta.status).toBe(200);
     expect(resposta.headers.get('cache-control')).toBe('no-store');
     const html = await resposta.text();
-    expect(html).toContain('discord-screen-captura');
     expect(html).toContain('discord-screenshare-focus');
+    expect(html).toContain('troca-completa');
   });
 
   it('serve a página auxiliar /focar customizada para câmera', async () => {
@@ -137,7 +137,7 @@ describe('cabeçalhos', () => {
     expect(resposta.status).toBe(200);
     const html = await resposta.text();
     expect(html).toContain('Ligando a câmera');
-    expect(html).toContain('discord-screen-captura');
+    expect(html).toContain('discord-screenshare-focus');
   });
 
   it('serve os termos sem a extensão no endereço', async () => {
