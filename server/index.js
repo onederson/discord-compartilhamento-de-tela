@@ -968,25 +968,37 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // Rate limit leve para evitar spam de logs, reaproveitando a lógica de janelas
 const logAttempts = new Map();
 app.post('/api/logs', (req, res) => {
+  const { level = 'error', message, details } = req.body ?? {};
+  if (
+    !['error', 'warn', 'info'].includes(level) ||
+    typeof message !== 'string' ||
+    !message.trim() ||
+    message.length > 2_000 ||
+    (details != null && (typeof details !== 'object' || Array.isArray(details)))
+  )
+    return res.status(400).end();
+
   const ip = req.ip || req.socket?.remoteAddress || 'unknown';
   const now = Date.now();
+  if (logAttempts.size >= 500) {
+    for (const [key, entry] of logAttempts) {
+      if (now - entry.windowStart >= 60_000) logAttempts.delete(key);
+    }
+  }
   let entry = logAttempts.get(ip);
-  if (!entry || now - entry.windowStart > 60000) {
+  if (!entry || now - entry.windowStart >= 60_000) {
+    if (!entry && logAttempts.size >= 1_000) return res.status(429).end();
     entry = { windowStart: now, count: 0 };
     logAttempts.set(ip, entry);
   }
 
-  if (entry.count > 100) return res.status(429).end(); // máximo de 100 logs por minuto por ip
+  if (entry.count >= 100) return res.status(429).end(); // máximo de 100 logs por minuto por ip
   entry.count++;
 
-  const { level, message, details } = req.body ?? {};
-  if (!message) return res.status(400).end();
-
-  const timestamp = new Date().toISOString();
-  const logLine = `[${timestamp}] [${level || 'error'}] ${message} ${details ? JSON.stringify(details) : ''}\n`;
-
   // Escreve no log assincronamente sem travar o servidor
-  fs.appendFile(path.join(__dirname, '..', 'client-errors.log'), logLine, () => {});
+  if (diagnostico.habilitado) {
+    setImmediate(() => diagnostico.log('client.error', { level, message, details }));
+  }
 
   res.json({ ok: true });
 });
@@ -1295,6 +1307,7 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     // O broadcaster manda ping periódico para manter a conexão viva.
     if (msg.type === 'ping') return;
@@ -1345,6 +1358,7 @@ function handleViewer(ws, room, auth) {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     // Nome exibido escolhido pela pessoa. Nada é persistido: vale enquanto a
     // conexão durar, e some quando ela reabre a atividade.
@@ -1367,7 +1381,9 @@ function handleViewer(ws, room, auth) {
       const agora = Date.now();
       if (agora - (ws.__lastDiagnosticAt ?? 0) < 10_000) return;
       ws.__lastDiagnosticAt = agora;
-      const reason = ['stall', 'resume', 'reconnect'].includes(msg.reason) ? msg.reason : 'unknown';
+      const reason = ['stall', 'resume', 'reconnect', 'manual'].includes(msg.reason)
+        ? msg.reason
+        : 'unknown';
       diagnostico.log('viewer.recovery', {
         reason,
         mobile: msg.mobile === true,

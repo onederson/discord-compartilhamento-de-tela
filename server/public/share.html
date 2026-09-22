@@ -10,14 +10,14 @@
       (function () {
         try {
           const salvo = localStorage.getItem('apple_theme');
-          const tema = salvo || 'dark';
+          const tema = salvo === 'light' ? 'light' : 'dark';
           document.documentElement.setAttribute('data-theme', tema);
         } catch {
           document.documentElement.setAttribute('data-theme', 'dark');
         }
       })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=52" />
+    <link rel="stylesheet" href="/share.css?v=53" />
   </head>
   <body>
     <div class="apple-shell">
@@ -27,7 +27,7 @@
           <img src="/logo.jpg" alt="Logo" width="40" height="40" class="brand-logo" />
           <div class="brand-titles">
             <h1>Transmitir</h1>
-            <span class="brand-sub">Sala de Tela</span>
+            <span class="brand-sub">Sala de Tela <span class="release-badge">2.0 beta</span></span>
           </div>
         </div>
 
@@ -61,7 +61,7 @@
                 <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
                 <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
               </svg>
-              <span>Light</span>
+              <span>Claro</span>
             </button>
             <button
               type="button"
@@ -82,12 +82,12 @@
               >
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
               </svg>
-              <span>Dark</span>
+              <span>Escuro</span>
             </button>
             <span class="theme-thumb" aria-hidden="true"></span>
           </div>
 
-          <div id="header-status-pill" class="status-pill status-offline-pill">
+          <div id="header-status-pill" class="status-pill status-offline-pill" role="status" aria-live="polite">
             <span class="dot"></span>
             <span id="header-status-text">Offline</span>
           </div>
@@ -96,6 +96,12 @@
 
       <!-- Erro global / status da página -->
       <p id="pageStatus" class="status" role="status"></p>
+
+      <dl id="sessionOverview" class="session-overview" aria-label="Informações da transmissão">
+        <div><dt>Qualidade escolhida</dt><dd id="quality-summary">—</dd></div>
+        <div><dt>Controle da Activity</dt><dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd></div>
+        <div><dt>Privacidade</dt><dd>Sem gravação pelo servidor</dd></div>
+      </dl>
 
       <!-- B. Bento Grid Layout -->
       <main class="bento-grid">
@@ -372,6 +378,7 @@
         const btnDark = document.getElementById('theme-dark');
 
         function aplicarTema(tema) {
+          tema = tema === 'light' ? 'light' : 'dark';
           doc.setAttribute('data-theme', tema);
           try {
             localStorage.setItem('apple_theme', tema);
@@ -381,10 +388,12 @@
           if (btnDark) {
             btnDark.classList.toggle('active', isDark);
             btnDark.setAttribute('aria-checked', String(isDark));
+            btnDark.tabIndex = isDark ? 0 : -1;
           }
           if (btnLight) {
             btnLight.classList.toggle('active', !isDark);
             btnLight.setAttribute('aria-checked', String(!isDark));
+            btnLight.tabIndex = isDark ? -1 : 0;
           }
         }
 
@@ -393,9 +402,18 @@
 
         btnLight?.addEventListener('click', () => aplicarTema('light'));
         btnDark?.addEventListener('click', () => aplicarTema('dark'));
+        for (const botao of [btnLight, btnDark]) {
+          botao?.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+            e.preventDefault();
+            const alvo = e.key === 'Home' ? btnLight : e.key === 'End' ? btnDark : botao === btnLight ? btnDark : btnLight;
+            alvo.focus();
+            alvo.click();
+          });
+        }
       })();
     </script>
 
-    <script type="module" src="/share.js?v=52"></script>
+    <script type="module" src="/share.js?v=53"></script>
   </body>
 </html>

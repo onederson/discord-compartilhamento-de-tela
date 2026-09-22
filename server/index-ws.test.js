@@ -228,6 +228,9 @@ describe('transmissor', () => {
     const { transmissor, espectador } = await noAr();
 
     transmissor.send('isto não é json');
+    transmissor.send('null');
+    transmissor.send('[]');
+    transmissor.send('42');
     transmissor.send(JSON.stringify({ type: 'config', config: { codec: 'vp8' } }));
 
     expect(await ate(espectador, doTipo('config'), 'a config seguinte')).toBeTruthy();
@@ -491,6 +494,9 @@ describe('espectador', () => {
 
     espectador.send(Buffer.from([1, 2, 3]));
     espectador.send('nem isto é json');
+    espectador.send('null');
+    espectador.send('[]');
+    espectador.send('42');
     espectador.send(JSON.stringify({ type: 'watch', slot: 'zero' }));
     espectador.send(JSON.stringify({ type: 'unwatch', slot: null }));
     espectador.send(JSON.stringify({ type: 'inventado' }));

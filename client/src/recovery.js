@@ -22,5 +22,13 @@ export function shouldRecoverStream({
 
 /** Mantém somente intenções que ainda correspondem a transmissões no ar. */
 export function recoverableSlots(watching, available) {
-  return [...watching].filter((slot) => available.has(slot));
+  return [...watching.keys()].filter((slot) => {
+    if (!available.has(slot)) return false;
+    const esperado = watching.get?.(slot);
+    const atual = available.get(slot);
+    return (
+      !esperado ||
+      (esperado.userId === atual?.userId && (esperado.fonte ?? 'tela') === (atual?.fonte ?? 'tela'))
+    );
+  });
 }

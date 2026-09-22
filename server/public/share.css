@@ -9,7 +9,11 @@
 :root,
 [data-theme="dark"] {
   /* Dark Mode (Padrão Pro) */
+  color-scheme: dark;
   --bg-global: #000000;
+  --status-positive: #6ee7a0;
+  --status-negative: #ff9f9a;
+  --badge-text: #acd0ff;
   --surface-tile: rgba(255, 255, 255, 0.04);
   --surface-tile-hover: rgba(255, 255, 255, 0.065);
   --surface-elevated: rgba(255, 255, 255, 0.08);
@@ -18,8 +22,8 @@
 
   /* Tipografia */
   --text-primary: #f5f5f7;
-  --text-secondary: #86868b;
-  --text-muted: #6e6e73;
+  --text-secondary: #a1a1aa;
+  --text-muted: #92929b;
 
   /* Superfície Secundária de Botões */
   --btn-secondary-surface: rgba(255, 255, 255, 0.1);
@@ -60,7 +64,11 @@
 
 [data-theme="light"] {
   /* Light Mode (Apple Clean) */
+  color-scheme: light;
   --bg-global: #f5f5f7;
+  --status-positive: #146c37;
+  --status-negative: #b42318;
+  --badge-text: #175dae;
   --surface-tile: rgba(255, 255, 255, 0.85);
   --surface-tile-hover: #ffffff;
   --surface-elevated: #ffffff;

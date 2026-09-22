@@ -76,11 +76,23 @@ const opcoes = {
   fps: Number(query.get('fps')) || 30,
 };
 
+function mostrarQualidade() {
+  const taxa = (opcoes.bitrate / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  $('quality-summary').textContent = `${opcoes.fps} fps · ${taxa} Mb/s`;
+}
+
+function mostrarControle(texto, estado) {
+  $('control-status').textContent = texto;
+  $('control-status').dataset.state = estado;
+}
+
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  mostrarQualidade();
 }
+mostrarQualidade();
 
 const paineis = {};
 window.name = 'discord-screen-captura';
@@ -177,6 +189,7 @@ function readTokenPayload() {
 }
 
 function falhar(titulo, msg) {
+  $('sessionOverview').hidden = true;
   for (const f of FONTES) $(`bloco-${f}`).hidden = true;
   // Título e motivo no mesmo lugar: sem o cabeçalho não há mais onde separar
   // os dois, e separados em duas linhas eles diziam a mesma coisa duas vezes.
@@ -305,6 +318,7 @@ function ligarControle() {
     `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`,
   );
 
+  controle.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
   controle.addEventListener('message', (e) => {
     if (typeof e.data !== 'string') return;
 
@@ -314,6 +328,7 @@ function ligarControle() {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     if (msg.type === 'start-request') {
       window.name = 'discord-screen-captura';
@@ -382,6 +397,7 @@ function ligarControle() {
       // gastaria rede contra um id que não existe mais.
       clearTimeout(religar);
       religar = 'morto';
+      mostrarControle('Sala encerrada', 'offline');
       $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
       $('pageStatus').className = 'status aviso';
     }
@@ -392,6 +408,7 @@ function ligarControle() {
   controle.addEventListener('close', () => {
     controle = null;
     if (religar === 'morto') return;
+    mostrarControle('Reconectando à sala', 'reconnecting');
     clearTimeout(religar);
     religar = setTimeout(ligarControle, 3000);
   });
@@ -405,6 +422,7 @@ function criarPainel(fonte) {
 
   let broadcaster = null;
   let ligando = false;
+  let watchersSignature = null;
 
   /**
    * Prévia local: o que a fonte mostra, antes de qualquer transmissão.
@@ -613,7 +631,9 @@ function criarPainel(fonte) {
 
         const box = $(`${fonte}-watchers-box`);
         const list = $(`${fonte}-watchers-list`);
-        if (box && list) {
+        const signature = JSON.stringify(s.watchers ?? []);
+        if (box && list && signature !== watchersSignature) {
+          watchersSignature = signature;
           if (Array.isArray(s.watchers) && s.watchers.length > 0) {
             box.hidden = false;
             list.replaceChildren(
