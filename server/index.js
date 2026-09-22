@@ -1334,15 +1334,20 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
       stopNativeAudio();
     } else if (msg.type === 'stop') {
       stopNativeAudio();
-      R.stopStream(room, entry);
+      ws.__explicitStop = true;
+      R.detachBroadcaster(room, ws);
       logDev(`[room ${room.id}] stream parada por ${info.name}`);
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code) => {
     stopNativeAudio();
-    R.detachBroadcaster(room, ws);
-    logDev(`[room ${room.id}] broadcaster saiu: ${info.name}`);
+    if (ws.__explicitStop || code === 1000 || code === 1005) {
+      R.detachBroadcaster(room, ws);
+    } else {
+      R.disconnectBroadcaster(room, ws);
+    }
+    logDev(`[room ${room.id}] broadcaster saiu: ${info.name} (code ${code})`);
   });
 }
 

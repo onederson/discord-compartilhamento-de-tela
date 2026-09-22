@@ -1205,7 +1205,40 @@ function endStream(slot) {
   renderBar();
 }
 
+const VIEWER_GRACE_PERIOD_MS = 15_000;
+let viewerGraceTimer = null;
+
+function iniciarGracePeriodViewer() {
+  if (viewerGraceTimer) return;
+  for (const s of streams.values()) {
+    s.player.prepareForRecovery?.();
+  }
+  viewerGraceTimer = setTimeout(() => {
+    viewerGraceTimer = null;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      closeAllStreams();
+      available.clear();
+      participants = [];
+      renderGrid();
+      renderBar();
+      setEmpty(
+        'Reconectando…',
+        'A conexão com a sala caiu. Tentaremos novamente automaticamente.',
+        true,
+      );
+    }
+  }, VIEWER_GRACE_PERIOD_MS);
+}
+
+function cancelarGracePeriodViewer() {
+  if (viewerGraceTimer) {
+    clearTimeout(viewerGraceTimer);
+    viewerGraceTimer = null;
+  }
+}
+
 function closeAllStreams() {
+  cancelarGracePeriodViewer();
   for (const slot of [...streams.keys()]) closeStream(slot);
   clearInterval(lagTimer);
   lagTimer = null;
@@ -1513,6 +1546,7 @@ function limparSala() {
     /* BroadcastChannel indisponível */
   }
 
+  cancelarGracePeriodViewer();
   closeAllStreams();
   available.clear();
   watching.clear();
@@ -1946,6 +1980,7 @@ function connect() {
     if (ws !== socket) return;
     clearTimeout(connectionTimer);
     connectionTimer = null;
+    cancelarGracePeriodViewer();
     abriu = true;
     reconnectDelay = 1000;
     setConnectionState('connected');
@@ -1985,6 +2020,7 @@ function connect() {
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     if (msg.type === 'state') {
+      cancelarGracePeriodViewer();
       participants = msg.participants ?? [];
       abas.clear();
       for (const uid of msg.abas ?? []) abas.add(uid);
@@ -2088,11 +2124,16 @@ function connect() {
     if (abriu) {
       reportLog('error', 'WebSocket fechou inesperadamente', { code: e.code, reason: e.reason });
     }
-    closeAllStreams();
-    available.clear();
-    participants = [];
-    renderGrid();
-    renderBar();
+
+    if (streams.size > 0 || watching.size > 0) {
+      iniciarGracePeriodViewer();
+    } else {
+      closeAllStreams();
+      available.clear();
+      participants = [];
+      renderGrid();
+      renderBar();
+    }
 
     // Saímos da sala de propósito: nada a reconectar.
     if (!roomTokens) return;
@@ -2104,10 +2145,7 @@ function connect() {
       } catch (err) {
         if (roomTokens !== sala || ws) return;
         if (err.status === 401 || err.status === 404) {
-          // Fechou sem nunca abrir: o token da sala foi recusado. Guardado, ele não
-          // vale mais depois que o servidor troca o segredo — e reconectar com o
-          // mesmo token repete o 401 até o fim dos tempos. Descartar e recomeçar é o
-          // único caminho que sai daqui.
+          cancelarGracePeriodViewer();
           const id = roomInfo?.id;
           limparSala();
           if (id) remove(`sala:${id}`);
@@ -2122,11 +2160,13 @@ function connect() {
       if (roomTokens !== sala || ws) return;
     }
 
-    setEmpty(
-      'Reconectando…',
-      'A conexão com a sala caiu. Tentaremos novamente automaticamente.',
-      true,
-    );
+    if (streams.size === 0) {
+      setEmpty(
+        'Reconectando…',
+        'A conexão com a sala caiu. Tentaremos novamente automaticamente.',
+        true,
+      );
+    }
     // Backoff — evita martelar o servidor se ele estiver fora do ar.
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;

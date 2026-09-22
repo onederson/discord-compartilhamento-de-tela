@@ -411,4 +411,24 @@ describe('continuidade de quem assiste', () => {
     expect(document.querySelector('.tile-palco canvas')).not.toBeNull();
     expect(document.querySelector('.tile-palco .watch-prompt')).toBeNull();
   });
+
+  it('mantém o canvas durante o grace period de queda e só limpa após expiração', async () => {
+    const primeiro = await entrar();
+    anunciar(primeiro);
+    document.querySelector('.watch-prompt button').click();
+    primeiro.message({ type: 'config', slot: 0, config });
+    expect(document.querySelector('.tile-palco canvas')).not.toBeNull();
+
+    // Queda do WebSocket
+    primeiro.dispatch('close');
+    expect(document.getElementById('connectionPill').dataset.state).toBe('reconnecting');
+
+    // Durante o grace period (ex: 2s após a queda): o canvas deve continuar na tela
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(document.querySelector('.tile-palco canvas')).not.toBeNull();
+
+    // Após expiração do grace period (total > 15s): a limpeza é executada
+    await vi.advanceTimersByTimeAsync(14_000);
+    expect(document.querySelector('.tile-palco canvas')).toBeNull();
+  });
 });

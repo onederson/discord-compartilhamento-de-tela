@@ -1416,7 +1416,10 @@ export function createBroadcaster({
       if (!running) return;
       try {
         mySlot = null;
-        ws = new WebSocket(wsUrl);
+        const reconnectUrl = wsUrl.includes('substituir=1')
+          ? wsUrl
+          : `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}substituir=1`;
+        ws = new WebSocket(reconnectUrl);
         ws.binaryType = 'arraybuffer';
 
         await new Promise((resolve, reject) => {

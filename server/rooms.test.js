@@ -727,6 +727,53 @@ describe('stopStream e detachBroadcaster', () => {
 
     expect(room.broadcasters.size).toBe(1);
   });
+
+  it('mantém a transmissão e o slot em grace period ao desconectar inesperadamente', () => {
+    const { room, ws, viewer, entry } = comTransmissao();
+    viewer.limpar();
+
+    R.disconnectBroadcaster(room, ws, 10_000);
+
+    expect(entry.disconnected).toBe(true);
+    expect(entry.streaming).toBe(true);
+    expect(viewer.tipos()).not.toContain('stream-stop');
+    expect(room.broadcasters.size).toBe(1);
+    expect(room.slots.has(entry.slot)).toBe(true);
+  });
+
+  it('reatacha ao mesmo slot se o transmissor reconectar durante o grace period', () => {
+    const { room, ws, viewer, entry } = comTransmissao();
+    viewer.limpar();
+
+    R.disconnectBroadcaster(room, ws, 10_000);
+    const novoWs = socket();
+    const ret = R.attachBroadcaster(room, novoWs, entry.info, entry.fonte);
+
+    expect(ret).toBe(entry);
+    expect(entry.disconnected).toBe(false);
+    expect(entry.ws).toBe(novoWs);
+    expect(entry.slot).toBe(0);
+    expect(viewer.tipos()).not.toContain('stream-stop');
+  });
+
+  it('encerra a transmissão se o grace period do transmissor expirar', () => {
+    vi.useFakeTimers();
+    try {
+      const { room, ws, viewer, entry } = comTransmissao();
+      viewer.limpar();
+
+      R.disconnectBroadcaster(room, ws, 10_000);
+      expect(room.broadcasters.size).toBe(1);
+
+      vi.advanceTimersByTime(10_000);
+
+      expect(viewer.tipos()).toContain('stream-stop');
+      expect(room.broadcasters.size).toBe(0);
+      expect(room.slots.has(entry.slot)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('attachViewer e detachViewer', () => {

@@ -144,6 +144,14 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
     }
   }
 
+  /**
+   * Prepara o decodificador para esperar um novo keyframe após queda momentânea,
+   * sem limpar o canvas com preto nem fechar o VideoDecoder.
+   */
+  function prepareForRecovery() {
+    needKeyframe = true;
+  }
+
   /** Atraso aproximado em ms. Exato na mesma máquina; entre máquinas, sujeito a desvio de relógio. */
   const getLag = () => lastLagMs;
 
@@ -162,7 +170,7 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
     return n;
   }
 
-  return { start, push, stop, getLag, takeFrameCount, getSizes };
+  return { start, push, stop, prepareForRecovery, getLag, takeFrameCount, getSizes };
 }
 
 function deserialize(c) {
