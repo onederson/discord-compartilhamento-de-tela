@@ -170,7 +170,9 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
     return n;
   }
 
-  return { start, push, stop, prepareForRecovery, getLag, takeFrameCount, getSizes };
+  const isConfigured = () => Boolean(decoder && decoder.state === 'configured');
+
+  return { start, push, stop, prepareForRecovery, isConfigured, getLag, takeFrameCount, getSizes };
 }
 
 function deserialize(c) {

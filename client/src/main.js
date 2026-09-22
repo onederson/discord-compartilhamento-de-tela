@@ -2060,7 +2060,7 @@ function connect() {
       // de assistir sobrevive à conexão; o servidor novo precisa recebê-la de
       // novo para reenviar config e pedir outro keyframe.
       for (const slot of recoverableSlots(watching, available)) {
-        pedirRecuperacao(slot, { motivo: 'reconnect' });
+        pedirRecuperacao(slot, { imediata: true, motivo: 'reconnect' });
       }
       renderGrid();
       renderBar();
@@ -2084,10 +2084,11 @@ function connect() {
       const configMudou = !anterior || JSON.stringify(anterior) !== JSON.stringify(msg.config);
       if (info) info.config = msg.config;
       if (watching.has(msg.slot)) {
-        if (!streams.has(msg.slot)) {
+        const s = streams.get(msg.slot);
+        if (!s) {
           openStream(msg.slot, info?.userId ?? msg.slot);
           startStream(msg.slot, msg.config);
-        } else if (configMudou) {
+        } else if (configMudou || !s.player?.isConfigured?.()) {
           startStream(msg.slot, msg.config);
         }
       }
