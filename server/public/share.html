@@ -17,7 +17,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=53" />
+    <link rel="stylesheet" href="/share.css?v=54" />
   </head>
   <body>
     <div class="apple-shell">
@@ -97,10 +97,49 @@
       <!-- Erro global / status da página -->
       <p id="pageStatus" class="status" role="status"></p>
 
+      <!-- Painel Bento: Visão Geral da Transmissão -->
       <dl id="sessionOverview" class="session-overview" aria-label="Informações da transmissão">
-        <div><dt>Qualidade escolhida</dt><dd id="quality-summary">—</dd></div>
-        <div><dt>Controle da Activity</dt><dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd></div>
-        <div><dt>Privacidade</dt><dd>Sem gravação pelo servidor</dd></div>
+        <div class="overview-card">
+          <div class="overview-icon quality-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Qualidade escolhida</dt>
+            <dd id="quality-summary">—</dd>
+          </div>
+        </div>
+
+        <div class="overview-card">
+          <div class="overview-icon control-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+              <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+              <line x1="12" y1="20" x2="12.01" y2="20"></line>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Controle da Activity</dt>
+            <dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd>
+          </div>
+        </div>
+
+        <div class="overview-card">
+          <div class="overview-icon privacy-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Privacidade</dt>
+            <dd>Sem gravação pelo servidor</dd>
+          </div>
+        </div>
       </dl>
 
       <!-- B. Bento Grid Layout -->
