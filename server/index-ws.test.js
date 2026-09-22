@@ -254,6 +254,19 @@ describe('transmissor', () => {
 
     expect(room.broadcasters.size).toBe(0);
   });
+
+  it('queda abrupta (code 1006) mantém a stream em grace period', async () => {
+    const { room, transmissor } = await noAr();
+
+    // terminate() simula queda abrupta de conexão (code 1006 sem handshake de close)
+    transmissor.terminate();
+    await new Promise((r) => setTimeout(r, 100));
+
+    // A sala ainda mantém o broadcaster no slot durante o grace period
+    expect(room.broadcasters.size).toBe(1);
+    const entry = [...room.broadcasters.values()][0];
+    expect(entry.disconnected).toBe(true);
+  });
 });
 
 describe('duas fontes', () => {

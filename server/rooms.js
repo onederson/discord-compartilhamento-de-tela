@@ -37,10 +37,9 @@ const MAX_ROOM_NAME = 40;
 // fantasma na lista.
 const EMPTY_GRACE_MS = 12 * 1000;
 // Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da sala.
-// Existe pelo mesmo motivo da carência acima: recarregar a atividade desconecta
-// e reconecta, e sem ela um F5 derrubaria a transmissão de quem não saiu de
-// lugar nenhum.
-const SEM_PRESENCA_MS = 30 * 1000;
+// 60s protege contra resets e reconexões do gateway de voz do Discord sem derrubar a tela.
+export const SEM_PRESENCA_MS = 60 * 1000;
+export const BROADCASTER_GRACE_MS = 15 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -412,6 +411,10 @@ export function encerrarPresenca(
 ) {
   const alvos = broadcastersOf(room, userId);
   for (const entry of alvos) {
+    if (entry.graceTimer) {
+      clearTimeout(entry.graceTimer);
+      entry.graceTimer = null;
+    }
     sendJson(entry.ws, {
       type: 'stop-request',
       motivo,
@@ -611,8 +614,14 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela', substituir = f
   // A recusa nomeia a fonte: "você já está transmitindo" era claro quando só
   // havia uma, mas com duas deixaria a pessoa sem saber qual delas repetiu.
   if (room.broadcasters.has(chave)) {
-    if (substituir) {
-      const entry = room.broadcasters.get(chave);
+    const entry = room.broadcasters.get(chave);
+    if (substituir || entry.disconnected) {
+      if (entry.graceTimer) {
+        clearTimeout(entry.graceTimer);
+        entry.graceTimer = null;
+      }
+      entry.disconnected = false;
+      entry.disconnectedAt = null;
       const antigoWs = entry.ws;
       if (antigoWs && antigoWs !== ws) {
         antigoWs.__substituido = true;
@@ -651,6 +660,9 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela', substituir = f
     streaming: false,
     // Desde quando quem transmite não está mais na sala. Null enquanto está.
     semDonoDesde: null,
+    disconnected: false,
+    disconnectedAt: null,
+    graceTimer: null,
     config: null,
     audioConfig: null,
     connectedAt: Date.now(),
@@ -833,13 +845,53 @@ export function stopStream(room, entry) {
 }
 
 export function detachBroadcaster(room, ws) {
-  const entry = ws.__entry;
+  const entry = ws?.__entry;
   if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
   if (ws.__substituido || entry.ws !== ws) return;
+
+  if (entry.graceTimer) {
+    clearTimeout(entry.graceTimer);
+    entry.graceTimer = null;
+  }
+  entry.disconnected = false;
+  entry.disconnectedAt = null;
 
   stopStream(room, entry);
   room.broadcasters.delete(entry.chave);
   room.slots.delete(entry.slot);
+  broadcastState(room);
+}
+
+/**
+ * Trata a queda inesperada do WebSocket do transmissor com Grace Period.
+ * Mantém o slot e os espectadores conectados aguardando a reconexão automática.
+ */
+export function disconnectBroadcaster(room, ws, graceMs = BROADCASTER_GRACE_MS) {
+  const entry = ws?.__entry;
+  if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
+  if (ws.__substituido || entry.ws !== ws) return;
+
+  // Se a transmissão não estava no ar ou carência não configurada, encerra imediatamente.
+  if (!entry.streaming || graceMs <= 0) {
+    detachBroadcaster(room, ws);
+    return;
+  }
+
+  if (entry.graceTimer) {
+    clearTimeout(entry.graceTimer);
+    entry.graceTimer = null;
+  }
+
+  entry.disconnected = true;
+  entry.disconnectedAt = Date.now();
+  entry.graceTimer = setTimeout(() => {
+    entry.graceTimer = null;
+    if (entry.disconnected && entry.ws === ws) {
+      detachBroadcaster(room, ws);
+    }
+  }, graceMs);
+  entry.graceTimer.unref?.();
+
   broadcastState(room);
 }
 
