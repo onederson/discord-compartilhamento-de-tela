@@ -64,6 +64,32 @@ afterAll(async () => {
   await new Promise((pronto) => server.close(pronto));
 });
 
+describe('/api/logs', () => {
+  let gravar;
+  beforeEach(async () => {
+    const { default: fs } = await import('node:fs');
+    gravar = vi.spyOn(fs, 'appendFile').mockImplementation(() => {});
+  });
+  afterEach(() => gravar.mockRestore());
+
+  it('respeita o diagnóstico desligado sem criar um log paralelo', async () => {
+    const resposta = await post('/api/logs', { level: 'error', message: 'Falha de teste' });
+    expect(resposta.status).toBe(200);
+    expect(gravar).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { message: { texto: 'inválido' } },
+    { message: ' ' },
+    { message: 'x'.repeat(2001) },
+    { level: 'inventado', message: 'teste' },
+    { message: 'teste', details: ['inválido'] },
+  ])('recusa um relatório malformado: %j', async (corpo) => {
+    expect((await post('/api/logs', corpo)).status).toBe(400);
+    expect(gravar).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/health', () => {
   it('responde sem contar nada sobre as salas', async () => {
     const resposta = await get('/api/health');

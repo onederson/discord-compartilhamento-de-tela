@@ -21,12 +21,28 @@ const capturaTelaDisponivel = () => canCaptureScreen();
 // Dentro da Activity todo tráfego precisa passar pelo proxy do Discord.
 const P = inDiscord ? '/.proxy' : '';
 
+let logWindow = 0;
+let logCount = 0;
 function reportLog(level, message, details = {}) {
+  const now = Date.now();
+  if (now - logWindow >= 60_000) {
+    logWindow = now;
+    logCount = 0;
+  }
+  if (logCount >= 20) return;
+  logCount++;
+  let body;
+  try {
+    body = JSON.stringify({ level, message: String(message).slice(0, 2_000), details });
+  } catch {
+    return;
+  }
   // Fire and forget log endpoint
   fetch(`${P}/api/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ level, message, details }),
+    body,
+    signal: AbortSignal.timeout(5_000),
   }).catch(() => {});
 }
 
@@ -34,7 +50,14 @@ const originalConsoleError = console.error;
 console.error = function (...args) {
   originalConsoleError.apply(console, args);
   const message = args
-    .map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a)))
+    .map((a) => {
+      if (a instanceof Error) return a.message;
+      try {
+        return typeof a === 'object' ? JSON.stringify(a) : String(a);
+      } catch {
+        return '[Objeto não serializável]';
+      }
+    })
     .join(' ');
   reportLog('error', message);
 };
@@ -56,7 +79,7 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 // sem pedir, o servidor nem envia os quadros — a economia de banda depende
 // disso, filtrar só na exibição gastaria a mesma saída.
 const available = new Map(); // slot -> { userId, config }
-const watching = new Set(); // slots que eu pedi para assistir
+const watching = new Map(); // slots que eu pedi para assistir
 
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
@@ -69,6 +92,9 @@ let clientId = null;
 let ws = null;
 let participants = [];
 let reconnectDelay = 1000;
+let reconnectTimer = null;
+let connectionTimer = null;
+let connectionState = 'connecting';
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
@@ -184,6 +210,50 @@ function definirTelaCheia(ativa, { gesto = false } = {}) {
   liberarImersao();
 }
 
+function setConnectionState(state) {
+  connectionState = state;
+  const texto = {
+    connecting: 'Conectando',
+    connected: 'Conectado',
+    reconnecting: 'Reconectando',
+    offline: 'Sem rede',
+  }[state];
+  $('connectionPill').dataset.state = state;
+  $('connectionText').textContent = texto;
+  $('pConnection').textContent = texto;
+  $('recoverStreams').disabled = state !== 'connected' || watching.size === 0;
+}
+
+function setPanel(aberto) {
+  $('panel').hidden = !aberto;
+  $('connectionPill').setAttribute('aria-expanded', String(aberto));
+  $('app').classList.toggle('detalhes', aberto);
+  if (aberto) acordarBarras();
+}
+
+const modalFocus = new Map();
+function openModal(id) {
+  const modal = $(id);
+  if (modal.hidden) modalFocus.set(id, document.activeElement);
+  modal.hidden = false;
+  for (const child of $('app').children) child.inert = child !== modal && child.id !== 'toast';
+}
+
+function closeModal(id) {
+  $(id).hidden = true;
+  for (const child of $('app').children) child.inert = false;
+  const anterior = modalFocus.get(id);
+  modalFocus.delete(id);
+  if (anterior?.isConnected && !anterior.closest('[hidden]'))
+    anterior.focus({ preventScroll: true });
+}
+
+function sendToRoom(data) {
+  if (ws?.readyState !== WebSocket.OPEN) return false;
+  ws.send(data);
+  return true;
+}
+
 function setEmpty(title, text, retry = false) {
   $('emptyTitle').textContent = title;
   $('emptyText').textContent = text;
@@ -247,8 +317,8 @@ function watchSlot(slot) {
   const info = available.get(slot);
   if (!info) return;
   activeSlot = slot;
-  watching.add(slot);
-  ws?.send(JSON.stringify({ type: 'watch', slot }));
+  watching.set(slot, { userId: info.userId, fonte: info.fonte ?? 'tela' });
+  sendToRoom(JSON.stringify({ type: 'watch', slot }));
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
   if (info.config) {
     openStream(slot, info.userId);
@@ -264,7 +334,10 @@ function pedirRecuperacao(slot, { imediata = false, motivo = 'stall' } = {}) {
   const s = streams.get(slot);
   const agora = Date.now();
   if (!imediata && s && agora - s.lastRecoveryAt < 2_500) return false;
-  if (s) s.lastRecoveryAt = agora;
+  if (s) {
+    s.lastRecoveryAt = agora;
+    s.recoveries = (s.recoveries ?? 0) + 1;
+  }
 
   ws.send(JSON.stringify({ type: 'watch', slot }));
   ws.send(
@@ -289,10 +362,10 @@ function recuperarTelasVisiveis() {
 
 function unwatchSlot(slot) {
   watching.delete(slot);
-  ws?.send(JSON.stringify({ type: 'unwatch', slot }));
+  sendToRoom(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
   if (activeSlot === slot) {
-    const proxima = [...watching].find((s) => available.has(s));
+    const proxima = [...watching.keys()].find((s) => available.has(s));
     activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
   renderGrid();
@@ -394,7 +467,7 @@ function renderGrid() {
   } else if (activeSlot === null || !available.has(activeSlot)) {
     // Sempre há uma tela em destaque quando existe transmissão.
     // Prioriza uma tela que o usuário já está assistindo; se não houver, pega a primeira disponível.
-    const assistindo = [...watching].find((s) => available.has(s));
+    const assistindo = [...watching.keys()].find((s) => available.has(s));
     activeSlot = assistindo ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
@@ -774,13 +847,13 @@ function openProfile() {
   $('profileId').textContent = inDiscord ? `Discord · ${session.user.id}` : 'modo local';
   $('profileInput').value = me.name;
 
-  $('profileModal').hidden = false;
+  openModal('profileModal');
   $('profileInput').focus();
   $('profileInput').select();
 }
 
 const closeProfile = () => {
-  $('profileModal').hidden = true;
+  closeModal('profileModal');
 };
 
 $('profileCancel').addEventListener('click', closeProfile);
@@ -798,7 +871,7 @@ $('profileSave').addEventListener('click', () => {
   if (name) {
     session.user.name = name;
     storeName(name);
-    ws?.send(JSON.stringify({ type: 'rename', name }));
+    sendToRoom(JSON.stringify({ type: 'rename', name }));
     renderProfileButton();
   }
   closeProfile();
@@ -954,6 +1027,7 @@ function buildPeopleList() {
 }
 
 function renderBar() {
+  $('recoverStreams').disabled = ws?.readyState !== WebSocket.OPEN || watching.size === 0;
   $('people').replaceChildren();
   $('people').insertAdjacentHTML(
     'afterbegin',
@@ -1123,7 +1197,7 @@ function endStream(slot) {
   }
 
   if (activeSlot === slot) {
-    const proxima = [...watching].find((s) => available.has(s));
+    const proxima = [...watching.keys()].find((s) => available.has(s));
     activeSlot = proxima ?? entradasDoGrid().find((e) => e.slot !== null)?.slot ?? null;
   }
 
@@ -1143,9 +1217,13 @@ function closeAllStreams() {
  */
 function ensureStatsTimer() {
   if (lagTimer) return;
+  let ultimaMedicao = Date.now();
   lagTimer = setInterval(() => {
     const agora = Date.now();
+    const segundos = Math.max(0.001, (agora - ultimaMedicao) / 1000);
+    ultimaMedicao = agora;
     for (const [slot, stream] of streams) {
+      stream.fps = Math.round(stream.player.takeFrameCount() / segundos);
       if (
         shouldRecoverStream({
           visible: document.visibilityState !== 'hidden',
@@ -1162,7 +1240,7 @@ function ensureStatsTimer() {
     const s = streams.get(activeSlot) ?? streams.values().next().value;
     if (!s) return;
     $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
-    $('pFps').textContent = `${s.player.takeFrameCount()} fps`;
+    $('pFps').textContent = `${s.fps} fps`;
     $('pRes').textContent = s.player.getSizes().video;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
@@ -1414,6 +1492,11 @@ let lobbyTimer = null;
  * close() não sobra por onde avisar.
  */
 function limparSala() {
+  clearTimeout(reconnectTimer);
+  clearTimeout(connectionTimer);
+  connectionTimer = null;
+  reconnectTimer = null;
+  reconnectDelay = 1000;
   stopMyBroadcast();
   if (ws && ws.readyState === WebSocket.OPEN) {
     try {
@@ -1444,8 +1527,9 @@ function limparSala() {
   roomInfo = null;
   setRoomUrl(null);
 
-  ws?.close();
+  const anterior = ws;
   ws = null;
+  anterior?.close();
 }
 
 async function showLobby() {
@@ -1455,6 +1539,10 @@ async function showLobby() {
   $('grid').hidden = true;
   $('empty').hidden = true;
   $('roomPill').hidden = true;
+  $('connectionPill').hidden = true;
+  setPanel(false);
+  $('diagnosticText').hidden = true;
+  $('diagnosticText').value = '';
   $('leaveRoom').hidden = true;
   $('roomSettings').hidden = true;
   $('share').hidden = true;
@@ -1583,7 +1671,7 @@ function askPassword(room, error) {
   $('joinError').textContent = error ?? '';
   $('joinError').hidden = !error;
   if (!error) $('joinPass').value = '';
-  $('joinModal').hidden = false;
+  openModal('joinModal');
   $('joinPass').focus();
 }
 
@@ -1643,6 +1731,7 @@ function openRoom(tokens, room) {
   clearInterval(lobbyTimer);
   lobbyTimer = null;
   $('roomPill').textContent = room.name;
+  $('connectionPill').hidden = false;
 
   setEmpty('Entrando…', room.name);
   connect();
@@ -1837,18 +1926,29 @@ async function post(url, body, { retry = true } = {}) {
 // ----------------------------------------------------------------- websocket
 
 function connect() {
-  if (!roomTokens) return;
+  if (!roomTokens || ws) return;
+  setConnectionState(navigator.onLine === false ? 'offline' : 'connecting');
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(
+  const socket = new WebSocket(
     `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(roomTokens.viewerToken)}`,
   );
-  ws.binaryType = 'arraybuffer';
+  ws = socket;
+  socket.binaryType = 'arraybuffer';
+  connectionTimer = setTimeout(() => {
+    if (ws === socket && socket.readyState === WebSocket.CONNECTING) socket.close();
+  }, 10_000);
 
   let abriu = false;
 
-  ws.addEventListener('open', () => {
+  socket.addEventListener('open', () => {
+    if (ws !== socket) return;
+    clearTimeout(connectionTimer);
+    connectionTimer = null;
     abriu = true;
     reconnectDelay = 1000;
+    setConnectionState('connected');
     $('grid').hidden = false;
     setEmpty('Ninguém na sala', 'Aguardando participantes.');
 
@@ -1861,19 +1961,28 @@ function connect() {
     }
   });
 
-  ws.addEventListener('message', (e) => {
+  socket.addEventListener('message', (e) => {
+    if (ws !== socket) return;
     // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
+      if (!(e.data instanceof ArrayBuffer) || e.data.byteLength <= 18) return;
       const view = new DataView(e.data);
       const s = streams.get(view.getUint8(0));
       if (!s) return;
-      if (view.getUint8(1) === 3) s.audio?.push(e.data);
-      else s.player.push(e.data);
+      const tipo = view.getUint8(1);
+      if (tipo === 3) s.audio?.push(e.data);
+      else if (tipo === 1 || tipo === 2) s.player.push(e.data);
       return;
     }
 
-    const msg = JSON.parse(e.data);
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     if (msg.type === 'state') {
       participants = msg.participants ?? [];
@@ -1892,7 +2001,12 @@ function connect() {
       // Limpa o que sumiu sem stream-stop (queda abrupta, por exemplo).
       const live = new Set((msg.streams ?? []).map((s) => s.slot));
       for (const s of msg.streams ?? []) {
-        const info = available.get(s.slot) ?? { userId: s.userId, config: null };
+        const anterior = available.get(s.slot);
+        const info =
+          anterior?.userId === s.userId && anterior?.fonte === (s.fonte ?? 'tela')
+            ? anterior
+            : { userId: s.userId, config: null };
+        if (info !== anterior) closeStream(s.slot);
         info.watchers = s.watchers ?? [];
         // Servidor antigo não manda fonte; tela é o que sempre houve.
         info.fonte = s.fonte ?? 'tela';
@@ -1900,7 +2014,12 @@ function connect() {
       }
       for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
       for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
-      for (const slot of [...watching]) if (!live.has(slot)) watching.delete(slot);
+      const retomaveis = new Set(recoverableSlots(watching, available));
+      for (const slot of watching.keys()) {
+        if (retomaveis.has(slot)) continue;
+        watching.delete(slot);
+        closeStream(slot);
+      }
       // O socket pode cair enquanto o celular suspende a Activity. A intenção
       // de assistir sobrevive à conexão; o servidor novo precisa recebê-la de
       // novo para reenviar config e pedir outro keyframe.
@@ -1911,9 +2030,17 @@ function connect() {
       renderBar();
     } else if (msg.type === 'stream-start') {
       // Só anuncia; ninguém assiste até pedir.
-      available.set(msg.slot, { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null });
-      watching.delete(msg.slot);
-      closeStream(msg.slot);
+      const anterior = available.get(msg.slot);
+      const mesmaFonte =
+        anterior?.userId === msg.userId && anterior?.fonte === (msg.fonte ?? 'tela');
+      available.set(
+        msg.slot,
+        mesmaFonte ? anterior : { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null },
+      );
+      if (!mesmaFonte) {
+        watching.delete(msg.slot);
+        closeStream(msg.slot);
+      }
       renderGrid();
     } else if (msg.type === 'config') {
       const info = available.get(msg.slot);
@@ -1952,7 +2079,12 @@ function connect() {
     }
   });
 
-  ws.addEventListener('close', (e) => {
+  socket.addEventListener('close', async (e) => {
+    if (ws !== socket) return;
+    clearTimeout(connectionTimer);
+    connectionTimer = null;
+    ws = null;
+    setConnectionState(navigator.onLine === false ? 'offline' : 'reconnecting');
     if (abriu) {
       reportLog('error', 'WebSocket fechou inesperadamente', { code: e.code, reason: e.reason });
     }
@@ -1960,31 +2092,50 @@ function connect() {
     available.clear();
     participants = [];
     renderGrid();
+    renderBar();
 
     // Saímos da sala de propósito: nada a reconectar.
     if (!roomTokens) return;
+    const sala = roomTokens;
 
-    // Fechou sem nunca abrir: o token da sala foi recusado. Guardado, ele não
-    // vale mais depois que o servidor troca o segredo — e reconectar com o
-    // mesmo token repete o 401 até o fim dos tempos. Descartar e recomeçar é o
-    // único caminho que sai daqui.
     if (!abriu) {
-      const id = roomInfo?.id;
-      limparSala();
-      if (id) remove(`sala:${id}`);
-      toast('Sua sessão expirou. Entrando de novo…');
-      if (inDiscord) entrarNaCall();
-      else showLobby();
-      return;
+      try {
+        await post(`${P}/api/rooms/open`, { token: sala.viewerToken }, { retry: false });
+      } catch (err) {
+        if (roomTokens !== sala || ws) return;
+        if (err.status === 401 || err.status === 404) {
+          // Fechou sem nunca abrir: o token da sala foi recusado. Guardado, ele não
+          // vale mais depois que o servidor troca o segredo — e reconectar com o
+          // mesmo token repete o 401 até o fim dos tempos. Descartar e recomeçar é o
+          // único caminho que sai daqui.
+          const id = roomInfo?.id;
+          limparSala();
+          if (id) remove(`sala:${id}`);
+          toast(
+            err.status === 404 ? 'A sala foi fechada.' : 'Sua sessão expirou. Entrando de novo…',
+          );
+          if (inDiscord) entrarNaCall();
+          else showLobby();
+          return;
+        }
+      }
+      if (roomTokens !== sala || ws) return;
     }
 
-    setEmpty('Reconectando…', 'A conexão com a sala caiu.');
+    setEmpty(
+      'Reconectando…',
+      'A conexão com a sala caiu. Tentaremos novamente automaticamente.',
+      true,
+    );
     // Backoff — evita martelar o servidor se ele estiver fora do ar.
-    setTimeout(connect, reconnectDelay);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      if (roomTokens === sala) connect();
+    }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
   });
 
-  ws.addEventListener('error', () => ws.close());
+  socket.addEventListener('error', () => socket.close());
 }
 
 // --------------------------------------------------------------------- ações
@@ -2060,6 +2211,7 @@ function renderPerfis() {
     const ativo = botao.dataset.quality === atual;
     botao.classList.toggle('active', ativo);
     botao.setAttribute('aria-checked', String(ativo));
+    botao.tabIndex = ativo ? 0 : -1;
   }
   $('quality').classList.toggle('on', atual !== 'equilibrado');
 }
@@ -2093,20 +2245,19 @@ function abrirQualidade({ primeiraVez = false } = {}) {
     }
   }
 
-  $('qualityModal').hidden = false;
+  openModal('qualityModal');
   document.querySelector(`[data-quality="${perfilAtual()}"]`)?.focus();
 }
 
 function fecharQualidade() {
-  $('qualityModal').hidden = true;
+  closeModal('qualityModal');
   fluxoPrimeiraTransmissao = false;
-  $('quality').focus();
 }
 
 function confirmarQualidade() {
   store('qualidade_configurada', '1');
   store('ajustes', JSON.stringify(ajustes));
-  $('qualityModal').hidden = true;
+  closeModal('qualityModal');
 
   if (fluxoPrimeiraTransmissao) {
     fluxoPrimeiraTransmissao = false;
@@ -2125,11 +2276,25 @@ $('qualityModal').addEventListener('click', (e) => {
   if (e.target === $('qualityModal')) fecharQualidade();
 });
 for (const botao of document.querySelectorAll('[data-quality]')) {
+  botao.addEventListener('keydown', (e) => {
+    const direcao = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+    if (!direcao && !['Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const botoes = [...document.querySelectorAll('[data-quality]')];
+    const indice =
+      e.key === 'Home'
+        ? 0
+        : e.key === 'End'
+          ? botoes.length - 1
+          : (botoes.indexOf(botao) + direcao + botoes.length) % botoes.length;
+    botoes[indice].focus();
+    botoes[indice].click();
+  });
   botao.addEventListener('click', () => {
     ajustes = { ...PERFIS_QUALIDADE[botao.dataset.quality] };
     store('ajustes', JSON.stringify(ajustes));
     renderPerfis();
-    ws?.send(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
+    sendToRoom(JSON.stringify({ type: 'config-broadcast', opcoes: opcoesDaFonte() }));
     myBroadcast?.setQuality(ajustes);
     toast(`Qualidade: ${botao.querySelector('strong').textContent}.`);
   });
@@ -2189,7 +2354,7 @@ function gerenciarAba(fonte, { acao = null } = {}) {
 }
 
 function fecharTodasAbasEIniciar(fonte, { motivo = null } = {}) {
-  ws?.send(JSON.stringify({ type: 'close-controls-broadcast' }));
+  sendToRoom(JSON.stringify({ type: 'close-controls-broadcast' }));
   try {
     const bc = new BroadcastChannel('discord-screenshare-focus');
     bc.postMessage({ type: 'fechar-todas' });
@@ -2235,7 +2400,7 @@ function trazerAba(fonte, { acao = null } = {}) {
     return;
   }
 
-  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+  sendToRoom(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
 
   const rotulo = fonte === 'camera' ? 'ligar a câmera' : 'compartilhar a tela';
 
@@ -2527,13 +2692,13 @@ $('newRoom').addEventListener('click', () => {
   if (!session) return;
   $('createName').value = '';
   $('createPass').value = '';
-  $('createModal').hidden = false;
+  openModal('createModal');
   $('createName').focus();
 });
 
-$('createCancel').addEventListener('click', () => ($('createModal').hidden = true));
+$('createCancel').addEventListener('click', () => closeModal('createModal'));
 $('createModal').addEventListener('click', (e) => {
-  if (e.target === $('createModal')) $('createModal').hidden = true;
+  if (e.target === $('createModal')) closeModal('createModal');
 });
 
 $('createGo').addEventListener('click', async () => {
@@ -2545,7 +2710,7 @@ $('createGo').addEventListener('click', async () => {
       name,
       password: $('createPass').value || null,
     });
-    $('createModal').hidden = true;
+    closeModal('createModal');
     openRoom(tokens, {
       id: tokens.roomId,
       // O servidor decide o nome quando fica em branco.
@@ -2557,9 +2722,9 @@ $('createGo').addEventListener('click', async () => {
   }
 });
 
-$('joinCancel').addEventListener('click', () => ($('joinModal').hidden = true));
+$('joinCancel').addEventListener('click', () => closeModal('joinModal'));
 $('joinModal').addEventListener('click', (e) => {
-  if (e.target === $('joinModal')) $('joinModal').hidden = true;
+  if (e.target === $('joinModal')) closeModal('joinModal');
 });
 $('joinPass').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') $('joinGo').click();
@@ -2567,14 +2732,14 @@ $('joinPass').addEventListener('keydown', (e) => {
 
 $('joinGo').addEventListener('click', async () => {
   if (!joinTarget) return;
-  $('joinModal').hidden = true;
+  closeModal('joinModal');
   await enterRoom(joinTarget, $('joinPass').value);
 });
 
 // Ajustes da sala: só o dono muda a senha, e o servidor confere de novo.
-$('roomCancel').addEventListener('click', () => ($('roomModal').hidden = true));
+$('roomCancel').addEventListener('click', () => closeModal('roomModal'));
 $('roomModal').addEventListener('click', (e) => {
-  if (e.target === $('roomModal')) $('roomModal').hidden = true;
+  if (e.target === $('roomModal')) closeModal('roomModal');
 });
 
 $('roomSave').addEventListener('click', async () => {
@@ -2584,7 +2749,7 @@ $('roomSave').addEventListener('click', async () => {
       roomId: roomTokens.roomId,
       password: $('roomPass').value || '',
     });
-    $('roomModal').hidden = true;
+    closeModal('roomModal');
     toast(r.locked ? 'Sala protegida com senha.' : 'Senha removida.');
   } catch (err) {
     toast(err.message, true);
@@ -2594,13 +2759,63 @@ $('roomSave').addEventListener('click', async () => {
 function openRoomSettings() {
   $('roomSub').textContent = roomInfo?.name ?? '';
   $('roomPass').value = '';
-  $('roomModal').hidden = false;
+  openModal('roomModal');
   $('roomPass').focus();
 }
 
 $('roomSettings').addEventListener('click', openRoomSettings);
 
 // ----------------------------------------------------------------- painel
+
+$('connectionPill').addEventListener('click', () => setPanel($('panel').hidden));
+$('closePanel').addEventListener('click', () => {
+  setPanel(false);
+  $('connectionPill').focus();
+});
+$('recoverStreams').addEventListener('click', () => {
+  for (const slot of recoverableSlots(watching, available)) {
+    pedirRecuperacao(slot, { imediata: true, motivo: 'manual' });
+  }
+  toast('Novo quadro solicitado. Sua transmissão continua aberta.');
+});
+$('copyDiagnostics').addEventListener('click', async () => {
+  const resumo = {
+    app: 'Sala de Tela',
+    release: '2.0 beta',
+    context: inDiscord ? 'discord' : 'web',
+    connection: connectionState,
+    profile: perfilAtual(),
+    streams: [...streams.entries()].map(([slot, s]) => ({
+      source: available.get(slot)?.fonte === 'camera' ? 'camera' : 'tela',
+      codec:
+        String(available.get(slot)?.config?.codec ?? '').match(
+          /^(avc1|vp8|vp09|av01)(?:\.|$)/,
+        )?.[1] ?? null,
+      resolution: s.player.getSizes().video,
+      fps: s.fps ?? 0,
+      estimatedLagMs: Math.max(0, s.player.getLag()),
+      audio: Boolean(s.audio?.temSom()),
+      recoveries: s.recoveries ?? 0,
+    })),
+  };
+  const texto = JSON.stringify(resumo, null, 2);
+  const campo = $('diagnosticText');
+  campo.value = texto;
+  campo.hidden = false;
+  if (navigator.clipboard?.writeText) {
+    try {
+      await withTimeout(navigator.clipboard.writeText(texto), 2_000, 'Cópia indisponível');
+      toast('Diagnóstico copiado, sem dados de acesso.');
+      return;
+    } catch {
+      /* clipboard indisponível – fallback abaixo */
+    }
+  }
+  if (!inRoom()) return;
+  campo.focus();
+  campo.select();
+  toast('Resumo selecionado. Use a opção Copiar do seu dispositivo.');
+});
 
 /**
  * As barras somem com o cursor parado e voltam ao primeiro movimento. Valem
@@ -2665,14 +2880,45 @@ window.addEventListener('pageshow', recuperarTelasVisiveis);
 window.addEventListener('online', recuperarTelasVisiveis);
 
 window.addEventListener('keydown', (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.defaultPrevented) return;
+  if (e.key === 'Tab') {
+    const modal = [...document.querySelectorAll('.modal')].find((el) => !el.hidden);
+    if (!modal) return;
+    const focaveis = [
+      ...modal.querySelectorAll('button, input, select, textarea, a[href], [tabindex]'),
+    ].filter((el) => el.tabIndex >= 0 && !el.disabled && !el.closest('[hidden]'));
+    const primeiro = focaveis[0];
+    const ultimo = focaveis.at(-1);
+    if (
+      e.shiftKey &&
+      (document.activeElement === primeiro || !modal.contains(document.activeElement))
+    ) {
+      e.preventDefault();
+      ultimo?.focus();
+    } else if (
+      !e.shiftKey &&
+      (document.activeElement === ultimo || !modal.contains(document.activeElement))
+    ) {
+      e.preventDefault();
+      primeiro?.focus();
+    }
+    return;
+  }
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
   for (const id of ['qualityModal', 'profileModal', 'roomModal', 'joinModal', 'createModal']) {
     if (!$(id).hidden) {
-      $(id).hidden = true;
+      if (id === 'qualityModal') fecharQualidade();
+      else closeModal(id);
+      e.preventDefault();
       return;
     }
+  }
+  if (!$('panel').hidden) {
+    setPanel(false);
+    $('connectionPill').focus();
+    return;
   }
 
   // Esc sai da tela cheia — é o reflexo de todo mundo.
@@ -2732,7 +2978,7 @@ function aoSairDaAtividade() {
       const url = `${P}/api/rooms/leave`;
       const body = JSON.stringify({
         roomId: roomInfo.id,
-        token: roomTokens?.viewer || session?.token,
+        token: roomTokens?.viewerToken,
         identity: session?.identity,
       });
       if (navigator.sendBeacon) {

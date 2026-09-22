@@ -54,13 +54,13 @@ export function signToken(payload, ttlSeconds = null) {
 
 export function verifyToken(token) {
   if (typeof token !== 'string' || !token.includes('.')) return null;
-  const [body, sig] = token.split('.');
-  if (!body || !sig) return null;
+  const [body, sig, extra] = token.split('.');
+  if (!body || !sig || extra !== undefined) return null;
 
   const expected = hmac(body);
   // Comparação em tempo constante — evita vazar o segredo por timing.
   if (
-    sig.length !== expected.length ||
+    Buffer.byteLength(sig) !== Buffer.byteLength(expected) ||
     !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
   ) {
     return null;
@@ -73,7 +73,13 @@ export function verifyToken(token) {
     return null;
   }
 
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+
   // Sem `exp` o token não expira — ver a nota em signToken.
-  if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) return null;
+  if (
+    'exp' in payload &&
+    (!Number.isFinite(payload.exp) || payload.exp <= Math.floor(Date.now() / 1000))
+  )
+    return null;
   return payload;
 }

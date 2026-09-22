@@ -4,14 +4,19 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sala de Tela</title>
-    <script type="module" crossorigin src="/assets/index-Kt79S873.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Bc1BOLAB.css">
+    <script type="module" crossorigin src="/assets/index-UbRBr6YA.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DgcURprs.css">
   </head>
   <body>
     <div id="app">
       <div class="topbar">
         <div id="people" class="pill" title="Pessoas na sala"></div>
         <div id="roomPill" class="pill room-pill" hidden></div>
+        <button id="connectionPill" class="pill connection-pill" type="button" data-state="connecting" aria-controls="panel" aria-expanded="false" aria-label="Estado da conexão e diagnóstico" hidden>
+          <span class="connection-dot" aria-hidden="true"></span>
+          <span id="connectionText" aria-live="polite">Conectando</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4" /></svg>
+        </button>
       </div>
 
       <main id="grid" class="grid"></main>
@@ -34,8 +39,9 @@
       <div id="lobby" class="lobby" hidden>
         <header class="lobby-head">
           <div>
-            <h1>Salas</h1>
-            <p class="muted">Neste canal de voz</p>
+            <p class="lobby-eyebrow">Sala de Tela <span class="release-badge">2.0 beta</span></p>
+            <h1>Uma sala, várias perspectivas.</h1>
+            <p class="muted">Escolha uma sala ou crie um espaço para compartilhar.</p>
           </div>
           <div class="lobby-actions">
             <button id="lobbyUser" class="user-chip" title="Seu perfil" hidden></button>
@@ -50,7 +56,7 @@
       <div id="createModal" class="modal" hidden>
         <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="createTitle">
           <h2 id="createTitle">Criar sala</h2>
-          <p class="modal-sub">A sala fecha sozinha quando fica vazia por alguns minutos.</p>
+          <p class="modal-sub">A sala fecha automaticamente pouco depois de todos saírem.</p>
 
           <label class="field-col">
             <span>Nome <em class="opt">(opcional)</em></span>
@@ -111,13 +117,28 @@
           Neste celular você pode assistir ou transmitir a câmera. Para compartilhar a tela e o
           áudio de outros aplicativos, use o iniciador em um computador.
         </p>
-        <div id="panel" class="panel" hidden>
+        <div id="panel" class="panel" role="region" aria-labelledby="panelTitle" hidden>
+          <div class="panel-heading">
+            <h2 id="panelTitle">Saúde da sala <span class="release-badge">2.0 beta</span></h2>
+            <button id="closePanel" class="panel-close" type="button" aria-label="Fechar diagnóstico">Fechar</button>
+          </div>
+          <div class="panel-row"><span>Conexão</span><strong id="pConnection">—</strong></div>
           <div class="panel-row"><span>Transmitindo</span><strong id="pWho">—</strong></div>
-          <div class="panel-row"><span>Latência</span><strong id="pLag">—</strong></div>
+          <div class="panel-row"><span>Atraso estimado</span><strong id="pLag">—</strong></div>
           <div class="panel-row"><span>Quadros</span><strong id="pFps">—</strong></div>
           <div class="panel-row"><span>Resolução</span><strong id="pRes">—</strong></div>
           <div class="panel-row"><span>Som</span><strong id="pSom">—</strong></div>
-          <button id="probe" class="panel-btn">Testar captura no iframe</button>
+          <p class="panel-note">O atraso é aproximado e depende também do relógio de cada computador.</p>
+          <div class="panel-actions">
+            <button id="recoverStreams" class="panel-btn" type="button" disabled>Recuperar imagem</button>
+            <button id="copyDiagnostics" class="panel-btn" type="button">Copiar diagnóstico</button>
+          </div>
+          <p class="panel-note">O resumo contém só dados técnicos, sem nomes, tokens ou links.</p>
+          <textarea id="diagnosticText" class="diagnostic-text" readonly spellcheck="false" aria-label="Resumo técnico para copiar" hidden></textarea>
+          <details class="panel-advanced">
+            <summary>Teste avançado de captura</summary>
+            <button id="probe" class="panel-btn">Testar captura no iframe</button>
+          </details>
         </div>
 
         <div class="dock">

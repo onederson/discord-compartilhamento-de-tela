@@ -49,6 +49,11 @@ export function atualizarCheckout({ raiz, habilitada = true, git = executarGit }
   if (sujo.status !== 0) return { status: 'indisponivel' };
   if (texto(sujo)) return { status: 'alterado' };
 
+  const branch = git(raiz, ['symbolic-ref', '--quiet', '--short', 'HEAD']);
+  if (branch.status !== 0 || texto(branch) !== 'main') {
+    return { status: 'branch-diferente', branch: texto(branch) || null };
+  }
+
   const fetch = git(raiz, ['fetch', '--quiet', '--no-tags', 'origin', 'main']);
   if (fetch.status !== 0) {
     return { status: fetch.signal === 'SIGTERM' ? 'timeout' : 'sem-rede' };
@@ -78,6 +83,7 @@ export function mensagemAtualizacao(resultado) {
     alterado: 'Atualização ignorada porque há arquivos modificados; nada foi sobrescrito.',
     divergente: 'Atualização ignorada porque este checkout tem commits próprios.',
     'origem-diferente': 'Atualização ignorada porque o origin não é o repositório oficial.',
+    'branch-diferente': `Atualização ignorada na branch ${resultado.branch ?? 'HEAD destacado'}; somente main recebe atualizações automáticas.`,
     'sem-origem': 'Atualização ignorada porque o Git não tem remote origin.',
     'sem-rede': 'Não foi possível verificar atualizações agora; o programa continuará offline.',
     timeout: 'A verificação de atualização demorou demais; o programa continuará.',

@@ -10,14 +10,14 @@
       (function () {
         try {
           const salvo = localStorage.getItem('apple_theme');
-          const tema = salvo || 'dark';
+          const tema = salvo === 'light' ? 'light' : 'dark';
           document.documentElement.setAttribute('data-theme', tema);
         } catch {
           document.documentElement.setAttribute('data-theme', 'dark');
         }
       })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=52" />
+    <link rel="stylesheet" href="/share.css?v=54" />
   </head>
   <body>
     <div class="apple-shell">
@@ -27,7 +27,7 @@
           <img src="/logo.jpg" alt="Logo" width="40" height="40" class="brand-logo" />
           <div class="brand-titles">
             <h1>Transmitir</h1>
-            <span class="brand-sub">Sala de Tela</span>
+            <span class="brand-sub">Sala de Tela <span class="release-badge">2.0 beta</span></span>
           </div>
         </div>
 
@@ -61,7 +61,7 @@
                 <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
                 <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
               </svg>
-              <span>Light</span>
+              <span>Claro</span>
             </button>
             <button
               type="button"
@@ -82,12 +82,12 @@
               >
                 <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
               </svg>
-              <span>Dark</span>
+              <span>Escuro</span>
             </button>
             <span class="theme-thumb" aria-hidden="true"></span>
           </div>
 
-          <div id="header-status-pill" class="status-pill status-offline-pill">
+          <div id="header-status-pill" class="status-pill status-offline-pill" role="status" aria-live="polite">
             <span class="dot"></span>
             <span id="header-status-text">Offline</span>
           </div>
@@ -96,6 +96,51 @@
 
       <!-- Erro global / status da página -->
       <p id="pageStatus" class="status" role="status"></p>
+
+      <!-- Painel Bento: Visão Geral da Transmissão -->
+      <dl id="sessionOverview" class="session-overview" aria-label="Informações da transmissão">
+        <div class="overview-card">
+          <div class="overview-icon quality-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+              <line x1="8" y1="21" x2="16" y2="21"></line>
+              <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Qualidade escolhida</dt>
+            <dd id="quality-summary">—</dd>
+          </div>
+        </div>
+
+        <div class="overview-card">
+          <div class="overview-icon control-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+              <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+              <line x1="12" y1="20" x2="12.01" y2="20"></line>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Controle da Activity</dt>
+            <dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd>
+          </div>
+        </div>
+
+        <div class="overview-card">
+          <div class="overview-icon privacy-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+          </div>
+          <div class="overview-text">
+            <dt>Privacidade</dt>
+            <dd>Sem gravação pelo servidor</dd>
+          </div>
+        </div>
+      </dl>
 
       <!-- B. Bento Grid Layout -->
       <main class="bento-grid">
@@ -372,6 +417,7 @@
         const btnDark = document.getElementById('theme-dark');
 
         function aplicarTema(tema) {
+          tema = tema === 'light' ? 'light' : 'dark';
           doc.setAttribute('data-theme', tema);
           try {
             localStorage.setItem('apple_theme', tema);
@@ -381,10 +427,12 @@
           if (btnDark) {
             btnDark.classList.toggle('active', isDark);
             btnDark.setAttribute('aria-checked', String(isDark));
+            btnDark.tabIndex = isDark ? 0 : -1;
           }
           if (btnLight) {
             btnLight.classList.toggle('active', !isDark);
             btnLight.setAttribute('aria-checked', String(!isDark));
+            btnLight.tabIndex = isDark ? -1 : 0;
           }
         }
 
@@ -393,9 +441,18 @@
 
         btnLight?.addEventListener('click', () => aplicarTema('light'));
         btnDark?.addEventListener('click', () => aplicarTema('dark'));
+        for (const botao of [btnLight, btnDark]) {
+          botao?.addEventListener('keydown', (e) => {
+            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+            e.preventDefault();
+            const alvo = e.key === 'Home' ? btnLight : e.key === 'End' ? btnDark : botao === btnLight ? btnDark : btnLight;
+            alvo.focus();
+            alvo.click();
+          });
+        }
       })();
     </script>
 
-    <script type="module" src="/share.js?v=52"></script>
+    <script type="module" src="/share.js?v=53"></script>
   </body>
 </html>

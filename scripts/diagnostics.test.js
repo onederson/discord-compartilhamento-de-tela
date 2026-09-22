@@ -30,6 +30,32 @@ describe('diagnóstico privativo', () => {
     );
   });
 
+  it('remove credenciais de fragmentos, JSON serializado e mensagens de erro', () => {
+    const texto = sanitizarTexto(
+      'https://x.test/#identity=credencial-url&ok=1 {"password":"credencial-json","access_token":"credencial-api"} token=credencial-texto',
+    );
+
+    expect(texto).not.toContain('credencial-');
+    expect(texto).toContain('ok=1');
+    expect(texto).toContain('[REMOVIDO]');
+  });
+
+  it('limita dados profundos e aceita referências circulares', () => {
+    const circular = { ok: true };
+    circular.self = circular;
+    expect(sanitizarDados(circular)).toEqual({ ok: true, self: '[CIRCULAR]' });
+
+    let profundo = { segredoNoFim: 'fim' };
+    for (let i = 0; i < 100; i++) profundo = { filho: profundo };
+    expect(JSON.stringify(sanitizarDados(profundo)).length).toBeLessThan(200);
+  });
+
+  it('não grava nada quando o diagnóstico está desligado', () => {
+    const logger = createDiagnosticLogger({ raiz: tmp(), habilitado: false });
+    expect(logger.log('client.error', { message: 'falha' })).toBe(false);
+    expect(fs.existsSync(logger.arquivo)).toBe(false);
+  });
+
   it('grava JSONL local sem o valor sensível', () => {
     const logger = createDiagnosticLogger({ raiz: tmp() });
     logger.log('viewer.recovery', { reason: 'stall', authorization: 'Bearer segredo' });
