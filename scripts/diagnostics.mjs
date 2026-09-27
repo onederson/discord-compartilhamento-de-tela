@@ -13,25 +13,45 @@ export function sanitizarTexto(valor) {
   return String(valor)
     .replace(/(bearer\s+)[^\s]+/gi, '$1[REMOVIDO]')
     .replace(
-      /([?&](?:t|token|code|state|proof|access_token|refresh_token)=)[^&#\s]+/gi,
+      /([?&#](?:t|token|code|state|proof|identity|access_token|refresh_token)=)[^&#\s]+/gi,
       '$1[REMOVIDO]',
     )
     .replace(/(DISCORD_(?:CLIENT_SECRET|BOT_TOKEN)|SESSION_SECRET)=[^\s]+/gi, '$1=[REMOVIDO]')
+    .replace(
+      /("[^"\n]*(?:token|secret|password|senha|cookie|authorization|identity|proof|credential)[^"\n]*"\s*:\s*)"(?:\\.|[^"\\])*"/gi,
+      '$1"[REMOVIDO]"',
+    )
+    .replace(
+      /(\b(?:token|password|senha|secret|identity|proof|cookie|authorization)\s*=\s*)(?:"[^"]*"|'[^']*'|[^\s&#]+)/gi,
+      '$1[REMOVIDO]',
+    )
     .slice(0, 2_000);
 }
 
 export function sanitizarDados(valor, chave = '') {
-  if (SENSITIVE_KEY.test(chave)) return '[REMOVIDO]';
-  if (typeof valor === 'string') return sanitizarTexto(valor);
-  if (typeof valor === 'number' || typeof valor === 'boolean' || valor == null) return valor;
-  if (Array.isArray(valor)) return valor.slice(0, 50).map((item) => sanitizarDados(item));
-  if (typeof valor !== 'object') return String(valor);
+  const vistos = new WeakSet();
+  let restantes = 200;
 
-  return Object.fromEntries(
-    Object.entries(valor)
-      .slice(0, 50)
-      .map(([nome, item]) => [nome, sanitizarDados(item, nome)]),
-  );
+  function limpar(item, nome, profundidade) {
+    if (SENSITIVE_KEY.test(nome)) return '[REMOVIDO]';
+    if (profundidade > 6 || restantes-- <= 0) return '[LIMITE]';
+    if (typeof item === 'string') return sanitizarTexto(item);
+    if (typeof item === 'number' || typeof item === 'boolean' || item == null) return item;
+    if (typeof item !== 'object') return sanitizarTexto(item);
+    if (vistos.has(item)) return '[CIRCULAR]';
+    vistos.add(item);
+    const resultado = Array.isArray(item)
+      ? item.slice(0, 50).map((valor) => limpar(valor, '', profundidade + 1))
+      : Object.fromEntries(
+          Object.entries(item)
+            .slice(0, 50)
+            .map(([key, valor]) => [key, limpar(valor, key, profundidade + 1)]),
+        );
+    vistos.delete(item);
+    return resultado;
+  }
+
+  return limpar(valor, chave, 0);
 }
 
 function rotacionar(arquivo) {

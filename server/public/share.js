@@ -76,14 +76,41 @@ const opcoes = {
   fps: Number(query.get('fps')) || 30,
 };
 
+function mostrarQualidade() {
+  const taxa = (opcoes.bitrate / 1_000_000).toLocaleString('pt-BR', { maximumFractionDigits: 1 });
+  $('quality-summary').textContent = `${opcoes.fps} fps · ${taxa} Mb/s`;
+}
+
+function mostrarControle(texto, estado) {
+  $('control-status').textContent = texto;
+  $('control-status').dataset.state = estado;
+}
+
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
+  mostrarQualidade();
 }
+mostrarQualidade();
 
 const paineis = {};
 window.name = 'discord-screen-captura';
+
+function atualizarStatusGlobal() {
+  const estaAoVivo = FONTES.some((f) => paineis[f]?.ativo());
+  const pill = $('header-status-pill');
+  const text = $('header-status-text');
+  if (!pill || !text) return;
+
+  if (estaAoVivo) {
+    pill.className = 'status-pill status-live-pill';
+    text.textContent = 'Ao Vivo';
+  } else {
+    pill.className = 'status-pill status-offline-pill';
+    text.textContent = 'Offline';
+  }
+}
 
 try {
   const focusBc = new BroadcastChannel('discord-screenshare-focus');
@@ -96,13 +123,24 @@ try {
       return;
     }
 
+    if (data.type === 'substituicao-concluida' || data.type === 'troca-completa') {
+      if (query.get('troca') !== '1') {
+        try {
+          window.close();
+        } catch {
+          /* a janela pode ter sido aberta pelo usuário ou o fechamento bloqueado pelo navegador */
+        }
+      }
+      return;
+    }
+
     if (data.type === 'trocar-tela' || (data.type === 'focar' && data.acao === 'trocar-tela')) {
       window.name = 'discord-screen-captura';
       window.focus();
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        solicitarTrocaDeTela(painel);
+        painel.trocarTela();
       }
       return;
     }
@@ -151,6 +189,7 @@ function readTokenPayload() {
 }
 
 function falhar(titulo, msg) {
+  $('sessionOverview').hidden = true;
   for (const f of FONTES) $(`bloco-${f}`).hidden = true;
   // Título e motivo no mesmo lugar: sem o cabeçalho não há mais onde separar
   // os dois, e separados em duas linhas eles diziam a mesma coisa duas vezes.
@@ -279,6 +318,7 @@ function ligarControle() {
     `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`,
   );
 
+  controle.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
   controle.addEventListener('message', (e) => {
     if (typeof e.data !== 'string') return;
 
@@ -288,6 +328,7 @@ function ligarControle() {
     } catch {
       return;
     }
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
     if (msg.type === 'start-request') {
       window.name = 'discord-screen-captura';
@@ -331,7 +372,7 @@ function ligarControle() {
       chamar('tela');
       const painel = paineis.tela;
       if (painel?.ativo()) {
-        solicitarTrocaDeTela(painel);
+        painel.trocarTela();
       }
 
       if ('Notification' in window && Notification.permission === 'granted' && document.hidden) {
@@ -356,6 +397,7 @@ function ligarControle() {
       // gastaria rede contra um id que não existe mais.
       clearTimeout(religar);
       religar = 'morto';
+      mostrarControle('Sala encerrada', 'offline');
       $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
       $('pageStatus').className = 'status aviso';
     }
@@ -366,6 +408,7 @@ function ligarControle() {
   controle.addEventListener('close', () => {
     controle = null;
     if (religar === 'morto') return;
+    mostrarControle('Reconectando à sala', 'reconnecting');
     clearTimeout(religar);
     religar = setTimeout(ligarControle, 3000);
   });
@@ -379,6 +422,7 @@ function criarPainel(fonte) {
 
   let broadcaster = null;
   let ligando = false;
+  let watchersSignature = null;
 
   /**
    * Prévia local: o que a fonte mostra, antes de qualquer transmissão.
@@ -556,9 +600,11 @@ function criarPainel(fonte) {
     setStatus(camera ? 'Aguardando a permissão da câmera…' : 'Aguardando você escolher a tela…');
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const isTroca = query.get('troca') === '1';
+    const wsUrl = `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}${isTroca ? '&substituir=1' : ''}`;
 
     broadcaster = createBroadcaster({
-      wsUrl: `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&fonte=${fonte}`,
+      wsUrl,
       bitrate: opcoes.bitrate,
       fps: opcoes.fps,
       audio: !camera,
@@ -585,7 +631,9 @@ function criarPainel(fonte) {
 
         const box = $(`${fonte}-watchers-box`);
         const list = $(`${fonte}-watchers-list`);
-        if (box && list) {
+        const signature = JSON.stringify(s.watchers ?? []);
+        if (box && list && signature !== watchersSignature) {
+          watchersSignature = signature;
           if (Array.isArray(s.watchers) && s.watchers.length > 0) {
             box.hidden = false;
             list.replaceChildren(
@@ -642,6 +690,18 @@ function criarPainel(fonte) {
         if (fonte === 'tela') $('tela-recovery').hidden = true;
         mostrarSetup();
         setStatus(reason);
+        if (reason === 'Transmissão substituída pela nova aba.') {
+          try {
+            window.close();
+          } catch {
+            /* navegador pode impedir fechar aba que não foi aberta por script */
+          }
+          setStatus(
+            'Transmissão transferida com sucesso para a nova aba. Você já pode fechar esta aba.',
+            'ok',
+          );
+        }
+        atualizarStatusGlobal();
       },
       onTrackEnded: () => {
         if (fonte === 'tela') {
@@ -673,6 +733,16 @@ function criarPainel(fonte) {
       // a saída fica à mão desde o início, em vez de só depois de um aviso.
       if (!camera) $('somAba').hidden = false;
       chamar(null);
+      if (isTroca) {
+        try {
+          const bc = new BroadcastChannel('discord-screenshare-focus');
+          bc.postMessage({ type: 'substituicao-concluida' });
+          bc.close();
+        } catch {
+          /* canal pode já estar fechado */
+        }
+      }
+      atualizarStatusGlobal();
     } catch (err) {
       broadcaster = null;
       el('start').disabled = false;
@@ -761,49 +831,23 @@ function criarPainel(fonte) {
     parar: () => {
       broadcaster?.stop();
       pararPrevia();
+      atualizarStatusGlobal();
     },
     trocarSom: () => broadcaster?.trocarSom(),
     trocarTela: () => {
       const agora = Date.now();
-      if (agora - ultimaTrocaTela < 2500) return null;
+      if (agora - ultimaTrocaTela < 1000) return null;
       ultimaTrocaTela = agora;
-      return broadcaster?.changeScreen()?.finally(() => {
-        setTimeout(() => {
-          if (ultimaTrocaTela === agora) ultimaTrocaTela = 0;
-        }, 500);
+      const promise = broadcaster?.changeScreen();
+      if (!promise) {
+        ultimaTrocaTela = 0;
+        return null;
+      }
+      return promise.finally(() => {
+        ultimaTrocaTela = 0;
       });
     },
   };
-}
-
-function solicitarTrocaDeTela(painel) {
-  const overlay = $('overlay-trocar-tela');
-  
-  const exibirOverlay = () => {
-    if (overlay) {
-      overlay.hidden = false;
-      overlay.onclick = () => {
-        overlay.hidden = true;
-        painel.trocarTela();
-      };
-    } else {
-      painel.setStatus(
-        'Clique no botão "Trocar de tela ou janela" acima para selecionar a nova tela.',
-        'aviso',
-      );
-    }
-  };
-
-  try {
-    const promise = painel.trocarTela();
-    if (promise) {
-      promise.catch(() => exibirOverlay());
-    } else {
-      exibirOverlay();
-    }
-  } catch {
-    exibirOverlay();
-  }
 }
 
 // ------------------------------------------------------------------ arranque
@@ -837,6 +881,31 @@ if (!payload) {
   // acabou de abrir em segundo plano deixaria o pedido preso sem ninguém ver.
   const pedida = query.get('fonte');
   if (FONTES.includes(pedida)) atenderPedido(pedida);
+
+  if (query.get('troca') === '1') {
+    const titleEl = document.querySelector('#tela-setup .empty-title');
+    const subEl = document.querySelector('#tela-setup .empty-subtitle');
+    const btnText = $('tela-start-text');
+    const btnCancel = $('tela-cancelar-troca');
+
+    if (titleEl) titleEl.textContent = 'Trocar de tela ou janela';
+    if (subEl)
+      subEl.textContent =
+        'A transmissão anterior continuará no ar até você confirmar a nova seleção.';
+    if (btnText) btnText.textContent = 'Escolher nova tela ou janela';
+    if (btnCancel) {
+      btnCancel.hidden = false;
+      btnCancel.addEventListener('click', () => {
+        window.close();
+      });
+    }
+    paineis.tela?.setStatus(
+      'A transmissão atual continua no ar. Clique no botão acima para selecionar a nova tela.',
+      'aviso',
+    );
+  }
+
+  atualizarStatusGlobal();
 }
 
 // Mantém o vídeo como está e troca só de onde vem o som — as fontes que não

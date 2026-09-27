@@ -88,6 +88,39 @@ describe('verifyToken recusa', () => {
     expect(verifyToken(`${corpo}.curta`)).toBeNull();
   });
 
+  it('uma assinatura multibyte, sem lançar erro na comparação', () => {
+    const [corpo] = signToken({ uid: 'alice' }).split('.');
+
+    expect(verifyToken(`${corpo}.${'é'.repeat(43)}`)).toBeNull();
+  });
+
+  it('um token com partes extras depois da assinatura', () => {
+    expect(verifyToken(`${signToken({ uid: 'alice' })}.extra`)).toBeNull();
+  });
+
+  it.each([null, 42, 'texto', []])('um payload que não é objeto: %j', async (payload) => {
+    const { createHmac } = await import('node:crypto');
+    const corpo = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const assinatura = createHmac('sha256', SEGREDO).update(corpo).digest('base64url');
+
+    expect(verifyToken(`${corpo}.${assinatura}`)).toBeNull();
+  });
+
+  it.each(['amanhã', null, 0])('uma expiração inválida: %j', (exp) => {
+    expect(verifyToken(signToken({ uid: 'alice', exp }))).toBeNull();
+  });
+
+  it('um token no instante exato da expiração', () => {
+    vi.useFakeTimers();
+    try {
+      const token = signToken({ uid: 'alice' }, 60);
+      vi.advanceTimersByTime(60_000);
+      expect(verifyToken(token)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('um token assinado com outro segredo', async () => {
     const outro = await carregar({ SESSION_SECRET: 'outro-segredo-completamente-diferente' });
     const alheio = outro.signToken({ uid: 'alice' });

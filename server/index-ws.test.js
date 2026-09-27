@@ -228,6 +228,9 @@ describe('transmissor', () => {
     const { transmissor, espectador } = await noAr();
 
     transmissor.send('isto não é json');
+    transmissor.send('null');
+    transmissor.send('[]');
+    transmissor.send('42');
     transmissor.send(JSON.stringify({ type: 'config', config: { codec: 'vp8' } }));
 
     expect(await ate(espectador, doTipo('config'), 'a config seguinte')).toBeTruthy();
@@ -250,6 +253,19 @@ describe('transmissor', () => {
     await ate(espectador, (m) => m.type === 'state' && m.streams.length === 0, 'a sala sem stream');
 
     expect(room.broadcasters.size).toBe(0);
+  });
+
+  it('queda abrupta (code 1006) mantém a stream em grace period', async () => {
+    const { room, transmissor } = await noAr();
+
+    // terminate() simula queda abrupta de conexão (code 1006 sem handshake de close)
+    transmissor.terminate();
+    await new Promise((r) => setTimeout(r, 100));
+
+    // A sala ainda mantém o broadcaster no slot durante o grace period
+    expect(room.broadcasters.size).toBe(1);
+    const entry = [...room.broadcasters.values()][0];
+    expect(entry.disconnected).toBe(true);
   });
 });
 
@@ -277,6 +293,24 @@ describe('duas fontes', () => {
     expect(await ate(segunda, doTipo('error'), 'a recusa')).toMatchObject({
       message: expect.stringMatching(/já está transmitindo a tela/),
     });
+  });
+
+  it('permite substituir transmissão ativa via parâmetro substituir=1', async () => {
+    const room = novaSala();
+    const ws1 = await conectar(tokenDe(room.id, 'broadcaster', 'u-sub'), '/ws', { fonte: 'tela' });
+    ws1.on('error', () => {});
+    await ate(ws1, doTipo('slot'), 'o primeiro slot');
+    ws1.send(JSON.stringify({ type: 'start' }));
+
+    const ws2 = await conectar(tokenDe(room.id, 'broadcaster', 'u-sub'), '/ws', {
+      fonte: 'tela',
+      substituir: '1',
+    });
+    ws2.on('error', () => {});
+    const slot2 = await ate(ws2, doTipo('slot'), 'o segundo slot');
+    expect(slot2.slot).toBe(0);
+
+    ws2.send(JSON.stringify({ type: 'start' }));
   });
 });
 
@@ -473,6 +507,9 @@ describe('espectador', () => {
 
     espectador.send(Buffer.from([1, 2, 3]));
     espectador.send('nem isto é json');
+    espectador.send('null');
+    espectador.send('[]');
+    espectador.send('42');
     espectador.send(JSON.stringify({ type: 'watch', slot: 'zero' }));
     espectador.send(JSON.stringify({ type: 'unwatch', slot: null }));
     espectador.send(JSON.stringify({ type: 'inventado' }));

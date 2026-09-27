@@ -34,6 +34,12 @@ function socket({ aberto = true, buffered = 0 } = {}) {
       this.enviados.length = 0;
       return this;
     },
+    close(code, reason) {
+      this.closed = true;
+      this.closeCode = code;
+      this.closeReason = reason;
+      this.readyState = 3;
+    },
   };
 }
 
@@ -339,11 +345,37 @@ describe('attachBroadcaster', () => {
     expect(viewer.tipos()).toContain('state');
   });
 
-  it('recusa a mesma pessoa transmitindo duas vezes', () => {
+  it('recusa a mesma pessoa transmitindo duas vezes sem a flag substituir', () => {
     const { room } = salaComEspectador();
     R.attachBroadcaster(room, socket(), pessoa('t1'));
 
     expect(R.attachBroadcaster(room, socket(), pessoa('t1'))).toMatch(/já está transmitindo/);
+  });
+
+  it('permite a mesma pessoa substituir a transmissão existente (hot swap)', () => {
+    const { room, viewer } = salaComEspectador();
+    const ws1 = socket();
+    const entry1 = R.attachBroadcaster(room, ws1, pessoa('t1'));
+    R.startStream(room, entry1);
+    R.watch(room, viewer, entry1.slot);
+    expect(viewer.__watching.has(entry1.slot)).toBe(true);
+
+    const ws2 = socket();
+    const entry2 = R.attachBroadcaster(room, ws2, pessoa('t1'), 'tela', true);
+
+    expect(entry2).toBe(entry1);
+    expect(entry2.slot).toBe(0);
+    expect(ws1.closed).toBe(true);
+    expect(ws1.closeCode).toBe(4001);
+    expect(ws2.mensagens()).toContainEqual({ type: 'slot', slot: 0 });
+
+    // Desconectar o ws antigo não derruba o broadcaster novo
+    R.detachBroadcaster(room, ws1);
+    expect(room.broadcasters.has(entry1.chave)).toBe(true);
+
+    // replaceStream mantém os espectadores assistindo
+    R.replaceStream(room, entry2);
+    expect(viewer.__watching.has(entry1.slot)).toBe(true);
   });
 
   it('recusa a quinta transmissão simultânea', () => {
@@ -694,6 +726,53 @@ describe('stopStream e detachBroadcaster', () => {
     R.detachBroadcaster(room, ws);
 
     expect(room.broadcasters.size).toBe(1);
+  });
+
+  it('mantém a transmissão e o slot em grace period ao desconectar inesperadamente', () => {
+    const { room, ws, viewer, entry } = comTransmissao();
+    viewer.limpar();
+
+    R.disconnectBroadcaster(room, ws, 10_000);
+
+    expect(entry.disconnected).toBe(true);
+    expect(entry.streaming).toBe(true);
+    expect(viewer.tipos()).not.toContain('stream-stop');
+    expect(room.broadcasters.size).toBe(1);
+    expect(room.slots.has(entry.slot)).toBe(true);
+  });
+
+  it('reatacha ao mesmo slot se o transmissor reconectar durante o grace period', () => {
+    const { room, ws, viewer, entry } = comTransmissao();
+    viewer.limpar();
+
+    R.disconnectBroadcaster(room, ws, 10_000);
+    const novoWs = socket();
+    const ret = R.attachBroadcaster(room, novoWs, entry.info, entry.fonte);
+
+    expect(ret).toBe(entry);
+    expect(entry.disconnected).toBe(false);
+    expect(entry.ws).toBe(novoWs);
+    expect(entry.slot).toBe(0);
+    expect(viewer.tipos()).not.toContain('stream-stop');
+  });
+
+  it('encerra a transmissão se o grace period do transmissor expirar', () => {
+    vi.useFakeTimers();
+    try {
+      const { room, ws, viewer, entry } = comTransmissao();
+      viewer.limpar();
+
+      R.disconnectBroadcaster(room, ws, 10_000);
+      expect(room.broadcasters.size).toBe(1);
+
+      vi.advanceTimersByTime(10_000);
+
+      expect(viewer.tipos()).toContain('stream-stop');
+      expect(room.broadcasters.size).toBe(0);
+      expect(room.slots.has(entry.slot)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

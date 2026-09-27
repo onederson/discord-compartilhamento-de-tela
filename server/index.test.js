@@ -64,6 +64,32 @@ afterAll(async () => {
   await new Promise((pronto) => server.close(pronto));
 });
 
+describe('/api/logs', () => {
+  let gravar;
+  beforeEach(async () => {
+    const { default: fs } = await import('node:fs');
+    gravar = vi.spyOn(fs, 'appendFile').mockImplementation(() => {});
+  });
+  afterEach(() => gravar.mockRestore());
+
+  it('respeita o diagnóstico desligado sem criar um log paralelo', async () => {
+    const resposta = await post('/api/logs', { level: 'error', message: 'Falha de teste' });
+    expect(resposta.status).toBe(200);
+    expect(gravar).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { message: { texto: 'inválido' } },
+    { message: ' ' },
+    { message: 'x'.repeat(2001) },
+    { level: 'inventado', message: 'teste' },
+    { message: 'teste', details: ['inválido'] },
+  ])('recusa um relatório malformado: %j', async (corpo) => {
+    expect((await post('/api/logs', corpo)).status).toBe(400);
+    expect(gravar).not.toHaveBeenCalled();
+  });
+});
+
 describe('/api/health', () => {
   it('responde sem contar nada sobre as salas', async () => {
     const resposta = await get('/api/health');
@@ -127,8 +153,8 @@ describe('cabeçalhos', () => {
     expect(resposta.status).toBe(200);
     expect(resposta.headers.get('cache-control')).toBe('no-store');
     const html = await resposta.text();
-    expect(html).toContain('discord-screen-captura');
     expect(html).toContain('discord-screenshare-focus');
+    expect(html).toContain('troca-completa');
   });
 
   it('serve a página auxiliar /focar customizada para câmera', async () => {
@@ -137,7 +163,7 @@ describe('cabeçalhos', () => {
     expect(resposta.status).toBe(200);
     const html = await resposta.text();
     expect(html).toContain('Ligando a câmera');
-    expect(html).toContain('discord-screen-captura');
+    expect(html).toContain('discord-screenshare-focus');
   });
 
   it('serve os termos sem a extensão no endereço', async () => {
@@ -179,6 +205,30 @@ describe('prefixo /.proxy da Activity', () => {
     const resposta = await get('/.proxyapi/health');
 
     expect(resposta.headers.get('content-type')).not.toContain('application/json');
+  });
+});
+
+describe('/focar', () => {
+  it('serve a página de instrução com título padrão', async () => {
+    const resp = await get('/focar');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Trocando de tela…');
+    expect(html).toContain('Transmitir');
+  });
+
+  it('serve a página com título para câmera quando fonte=camera', async () => {
+    const resp = await get('/focar?fonte=camera');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Ligando a câmera…');
+  });
+
+  it('serve a página com título de tela quando fonte=tela', async () => {
+    const resp = await get('/focar?fonte=tela');
+    expect(resp.status).toBe(200);
+    const html = await resp.text();
+    expect(html).toContain('Compartilhando a tela…');
   });
 });
 

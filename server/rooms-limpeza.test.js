@@ -13,7 +13,7 @@ const R = await import('./rooms.js');
 
 const SWEEP = 4 * 1000;
 const CARENCIA = 12 * 1000;
-const SEM_PRESENCA = 30 * 1000;
+const SEM_PRESENCA = R.SEM_PRESENCA_MS;
 
 let sequencia = 0;
 const instancia = () => `faxina-${++sequencia}`;

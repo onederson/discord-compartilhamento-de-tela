@@ -1380,9 +1380,13 @@ export function createBroadcaster({
         if (!resolvido) falhar('Falha ao conectar no servidor.');
       });
 
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (e) => {
         clearTimeout(timeout);
         stopKeepalive();
+        if (e?.code === 4001) {
+          stop('Transmissão substituída pela nova aba.');
+          return;
+        }
         if (running) {
           // Conexão caiu com a transmissão no ar: tentar reconectar em vez de
           // desistir. O encoder e o stream continuam vivos; só o socket morreu.
@@ -1412,7 +1416,10 @@ export function createBroadcaster({
       if (!running) return;
       try {
         mySlot = null;
-        ws = new WebSocket(wsUrl);
+        const reconnectUrl = wsUrl.includes('substituir=1')
+          ? wsUrl
+          : `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}substituir=1`;
+        ws = new WebSocket(reconnectUrl);
         ws.binaryType = 'arraybuffer';
 
         await new Promise((resolve, reject) => {
@@ -1463,8 +1470,12 @@ export function createBroadcaster({
           });
 
           ws.addEventListener('error', () => reject(new Error('Falha na reconexão.')));
-          ws.addEventListener('close', () => {
+          ws.addEventListener('close', (e) => {
             stopKeepalive();
+            if (e?.code === 4001) {
+              stop('Transmissão substituída pela nova aba.');
+              return;
+            }
             if (running && !resolvido) {
               reject(new Error('Conexão fechou durante reconexão.'));
             }

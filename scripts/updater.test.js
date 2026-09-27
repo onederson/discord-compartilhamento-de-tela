@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { atualizacaoLigada, atualizarCheckout, normalizarOrigem } from './updater.mjs';
 
 const temporarios = [];
@@ -65,6 +65,32 @@ describe('atualizador conservador', () => {
     expect(atualizarCheckout({ raiz })).toEqual({ status: 'alterado' });
     expect(fs.readFileSync(path.join(raiz, 'arquivo.txt'), 'utf8')).toBe('mudança local');
   });
+
+  it.each(['dev', 'release/2.0-beta', ''])(
+    'não busca nem mescla o upstream na branch %s',
+    (branch) => {
+      const raiz = tmp();
+      fs.mkdirSync(path.join(raiz, '.git'));
+      const executar = vi.fn((_raiz, args) => {
+        if (args[0] === 'rev-parse') return { status: 0, stdout: 'true' };
+        if (args[0] === 'remote')
+          return {
+            status: 0,
+            stdout: 'https://github.com/DevilNine/discord-compartilhamento-de-tela.git',
+          };
+        if (args[0] === 'symbolic-ref') return { status: branch ? 0 : 1, stdout: branch };
+        return { status: 0, stdout: '' };
+      });
+
+      expect(atualizarCheckout({ raiz, git: executar })).toEqual({
+        status: 'branch-diferente',
+        branch: branch || null,
+      });
+      expect(executar.mock.calls.some(([, args]) => ['fetch', 'merge'].includes(args[0]))).toBe(
+        false,
+      );
+    },
+  );
 
   it('aplica somente fast-forward do origin/main', () => {
     const remoto = tmp();
