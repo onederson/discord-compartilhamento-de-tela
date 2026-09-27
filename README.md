@@ -32,8 +32,9 @@ Uma pessoa compartilha, todo mundo assiste sem sair do Discord. Também funciona
 | Áudio junto com a imagem | Áudio da guia/janela/sistema no Chromium; no Firefox do PC anfitrião, captura WASAPI isolada por processo |
 | Vários transmissores por sala | Cada participante recebe um canal; quem assiste escolhe o que ver |
 | Qualidade adaptativa | Perfis de 30/60 fps até 1080p; reduz sob congestionamento e recupera quando a rede estabiliza |
-| Resiliente | Reconexão automática do transmissor e do espectador; keyframe sob demanda para quem entra depois |
-| Salas protegidas | Senha com `scrypt`, tokens com escopo, painel administrativo opcional |
+| Resiliente | Reconexão automática com Grace Period para transmissor e espectador (preserva slot e fluxo sem quedas em oscilações); keyframe sob demanda |
+| Salas protegidas | Senha com `scrypt`, tokens com assinatura HMAC-SHA256 e validação timing-safe, painel administrativo opcional |
+| Interface e UX | Layout Bento estilo Apple, pílula de status dinâmica (Offline / Ao Vivo), temas Claro/Escuro e troca rápida de tela sem derrubar espectadores |
 | Portátil | `INICIAR.bat` / `INICIAR.sh` / `INICIAR.command` baixam Node.js e `cloudflared` dentro da pasta; nada é instalado no sistema |
 
 ---
@@ -207,11 +208,12 @@ Requer Node.js 22 (o mesmo do CI) ou 24.
 ```bash
 npm ci                 # dependências (raiz, client e server são workspaces)
 npm run dev            # servidor + client em modo desenvolvimento
+npm run dev:rapido     # inicialização rápida de desenvolvimento
 npm run build          # compila client/dist (versionado: o servidor serve daqui)
-npm test               # vitest: 400 testes de client, server, shared e scripts
+npm test               # vitest: ~480 testes de client, server, shared e scripts
 npm run lint           # eslint
 npm run format:check   # prettier
-npm run smoke          # sobe o servidor e valida as rotas principais
+npm run smoke          # sobe o servidor e valida as rotas principais (ou smoke:controle, smoke:audio, smoke:admin)
 ```
 
 Convenções: código e comentários em português; commits no estilo `tipo(escopo): resumo`. O CI (`.github/workflows/ci.yml`) roda lint, prettier, build, testes, smoke e o build Docker.
