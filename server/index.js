@@ -42,6 +42,12 @@ const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 const isProd = NODE_ENV === 'production';
 const ADMIN_ID = String(DISCORD_ADMIN_ID).trim();
 const ADMIN_COOKIE = 'discord_screen_admin';
+// Carência antes de encerrar a transmissão de quem ficou sem socket na atividade.
+// VIEWER_GRACE_MS no ambiente existe para os testes; o padrão vem de rooms.js.
+const VIEWER_GRACE_MS =
+  process.env.VIEWER_GRACE_MS && Number.isFinite(Number(process.env.VIEWER_GRACE_MS))
+    ? Number(process.env.VIEWER_GRACE_MS)
+    : R.VIEWER_GRACE_MS;
 import { logDev, warnDev } from './utils.js';
 
 // Falha no arranque, não no primeiro pedido: subir sem segredo significa
@@ -1462,14 +1468,26 @@ function handleViewer(ws, room, auth) {
   const aoDesconectarViewer = () => {
     R.detachViewer(room, ws);
     if (!R.temViewer(room, auth.uid)) {
-      const paradas = R.encerrarPresenca(
+      // Com carência: o socket da atividade cai e volta em segundos numa
+      // oscilação de rede ou reset do gateway do Discord, e derrubar a captura
+      // aqui matava a transmissão e fechava a aba por um falso "saiu". Se a
+      // pessoa reconectar, attachViewer cancela; se não, encerra como antes.
+      const agendou = R.agendarEncerramentoPresenca(
         room,
         auth.uid,
         'Você saiu da atividade, então a transmissão parou.',
+        VIEWER_GRACE_MS,
+        (paradas) => {
+          if (paradas) {
+            logDev(
+              `[room ${room.id}] ${auth.name} saiu da atividade — ${paradas} transmissão(ões) encerrada(s)`,
+            );
+          }
+        },
       );
-      if (paradas) {
+      if (agendou) {
         logDev(
-          `[room ${room.id}] ${auth.name} saiu da atividade — ${paradas} transmissão(ões) encerrada(s) imediatamente`,
+          `[room ${room.id}] ${auth.name} sem conexão na atividade — aguardando ${Math.round(VIEWER_GRACE_MS / 1000)}s antes de encerrar`,
         );
       }
     }

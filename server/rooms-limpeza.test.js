@@ -104,6 +104,76 @@ describe('sala vazia', () => {
   });
 });
 
+describe('carência de presença do espectador', () => {
+  const quem = { id: 'transmissor', name: 'Quem transmite' };
+
+  function cenario() {
+    const room = sala();
+    const captura = socket();
+    R.attachBroadcaster(room, captura, quem);
+    const aba = socket();
+    R.attachControl(room, aba, quem.id);
+    const viewer = socket();
+    R.attachViewer(room, viewer, quem);
+    return { room, captura, aba, viewer };
+  }
+
+  it('não derruba antes do prazo e derruba depois dele', () => {
+    const { room, captura, aba, viewer } = cenario();
+    R.detachViewer(room, viewer);
+
+    expect(R.agendarEncerramentoPresenca(room, quem.id, 'saiu')).toBe(true);
+
+    vi.advanceTimersByTime(R.VIEWER_GRACE_MS - 1);
+    expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(false);
+    expect(aba.recebidas.some((m) => m.type === 'close-request')).toBe(false);
+
+    vi.advanceTimersByTime(1);
+    expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(true);
+    expect(aba.recebidas.some((m) => m.type === 'close-request')).toBe(true);
+    expect(room.broadcasters.size).toBe(0);
+  });
+
+  it('cancela quando o espectador reconecta dentro do prazo', () => {
+    const { room, captura, aba, viewer } = cenario();
+    R.detachViewer(room, viewer);
+    R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+
+    vi.advanceTimersByTime(R.VIEWER_GRACE_MS / 2);
+    R.attachViewer(room, socket(), quem);
+
+    vi.advanceTimersByTime(R.VIEWER_GRACE_MS * 2);
+    expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(false);
+    expect(aba.recebidas.some((m) => m.type === 'close-request')).toBe(false);
+    expect(room.broadcasters.size).toBe(1);
+  });
+
+  it('não agenda nada quando a pessoa não tem transmissão nem aba de captura', () => {
+    const room = sala();
+    expect(R.agendarEncerramentoPresenca(room, 'ninguem', 'saiu')).toBe(false);
+    expect(room.presencaTimers.size).toBe(0);
+  });
+
+  it('com carência zero, encerra na hora', () => {
+    const { room, captura, viewer } = cenario();
+    R.detachViewer(room, viewer);
+
+    R.agendarEncerramentoPresenca(room, quem.id, 'saiu', 0);
+
+    expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(true);
+  });
+
+  it('o encerramento explícito (/leave) cancela o agendamento pendente', () => {
+    const { room, viewer } = cenario();
+    R.detachViewer(room, viewer);
+    R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+
+    R.encerrarPresenca(room, quem.id);
+
+    expect(room.presencaTimers.size).toBe(0);
+  });
+});
+
 describe('baldes de tráfego', () => {
   it('guardam só o último minuto', () => {
     const room = sala();

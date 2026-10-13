@@ -274,7 +274,7 @@ describe('/api/session-guest', () => {
       expect(resp.status).toBe(403);
       expect((await resp.json()).error).toMatch(/desativado/);
     } finally {
-      delete process.env.PERMITIR_WEB;
+      process.env.PERMITIR_WEB = '1';
     }
   });
 });

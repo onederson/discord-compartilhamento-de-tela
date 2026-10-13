@@ -40,6 +40,12 @@ const EMPTY_GRACE_MS = 12 * 1000;
 // 60s protege contra resets e reconexões do gateway de voz do Discord sem derrubar a tela.
 export const SEM_PRESENCA_MS = 60 * 1000;
 export const BROADCASTER_GRACE_MS = 15 * 1000;
+// Quanto o servidor espera, depois que o último socket de espectador de alguém
+// cai, antes de encerrar a transmissão e mandar a aba de captura se fechar.
+// Uma oscilação de rede ou o reset do gateway do Discord derruba e refaz esse
+// socket em segundos; sair de verdade da atividade continua sendo detectado,
+// só que com esta folga (e imediatamente via /api/rooms/leave).
+export const VIEWER_GRACE_MS = 15 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -299,6 +305,7 @@ export function createRoom({
     slots: new Map(),
     viewers: new Set(),
     controles: new Set(),
+    presencaTimers: new Map(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -346,6 +353,7 @@ export function ensureCallRoom(instance, id, metadata = {}) {
     slots: new Map(),
     viewers: new Set(),
     controles: new Set(),
+    presencaTimers: new Map(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -409,6 +417,7 @@ export function encerrarPresenca(
   userId,
   motivo = 'Você saiu da atividade, então a transmissão parou.',
 ) {
+  cancelarEncerramentoPresenca(room, userId);
   const alvos = broadcastersOf(room, userId);
   for (const entry of alvos) {
     if (entry.graceTimer) {
@@ -429,6 +438,57 @@ export function encerrarPresenca(
   }
   broadcastState(room);
   return alvos.length;
+}
+
+/** Cancela um encerramento agendado: a pessoa voltou antes de a carência acabar. */
+export function cancelarEncerramentoPresenca(room, userId) {
+  const timer = room.presencaTimers?.get(userId);
+  if (!timer) return false;
+  clearTimeout(timer);
+  room.presencaTimers.delete(userId);
+  return true;
+}
+
+/**
+ * Agenda o encerramento da presença de quem ficou sem nenhum socket de
+ * espectador, dando tempo para a reconexão automática da atividade.
+ *
+ * Se a pessoa reconectar (attachViewer) o agendamento é cancelado e a
+ * transmissão segue intacta. Se não, passado `graceMs`, vale o mesmo
+ * encerramento imediato de antes. Só agenda quando há algo a encerrar.
+ *
+ * @returns {boolean} true se algo foi agendado
+ */
+export function agendarEncerramentoPresenca(
+  room,
+  userId,
+  motivo,
+  graceMs = VIEWER_GRACE_MS,
+  aoEncerrar = null,
+) {
+  const temAlgo =
+    broadcastersOf(room, userId).length > 0 ||
+    [...room.controles].some((ws) => ws.__controlOf === userId);
+  if (!temAlgo) return false;
+
+  if (graceMs <= 0) {
+    const paradas = encerrarPresenca(room, userId, motivo);
+    aoEncerrar?.(paradas);
+    return true;
+  }
+
+  room.presencaTimers ??= new Map();
+  cancelarEncerramentoPresenca(room, userId);
+  const timer = setTimeout(() => {
+    room.presencaTimers.delete(userId);
+    // A sala pode ter fechado, ou a pessoa voltado por outro caminho.
+    if (rooms.get(room.id) !== room || temViewer(room, userId)) return;
+    const paradas = encerrarPresenca(room, userId, motivo);
+    aoEncerrar?.(paradas);
+  }, graceMs);
+  timer.unref?.();
+  room.presencaTimers.set(userId, timer);
+  return true;
 }
 
 function derrubarAbandonadas(room, now) {
@@ -944,6 +1004,8 @@ export function attachViewer(room, ws, info) {
   ws.__mediaBytesOut = ws.__mediaBytesOut ?? 0;
   room.viewers.add(ws);
   room.emptySince = null;
+  // Voltou dentro da carência: a transmissão e a aba de captura seguem de pé.
+  if (info?.id) cancelarEncerramentoPresenca(room, info.id);
 
   sendJson(ws, roomState(room));
 

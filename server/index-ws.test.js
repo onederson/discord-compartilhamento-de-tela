@@ -13,6 +13,10 @@ vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
 vi.spyOn(console, 'error').mockImplementation(() => {});
 
+// Carência curta só para o teste não esperar os 15s reais.
+const GRACA_MS = 300;
+process.env.VIEWER_GRACE_MS = String(GRACA_MS);
+
 const { server, wss } = await import('./index.js');
 const { signToken } = await import('./tokens.js');
 const R = await import('./rooms.js');
@@ -536,7 +540,7 @@ describe('espectador', () => {
     ).toBeTruthy();
   });
 
-  it('ao desconectar o viewer da atividade, a transmissão da pessoa é derrubada na hora e a aba de controle recebe close-request', async () => {
+  it('ao desconectar o viewer da atividade, a transmissão é derrubada e a aba recebe close-request só depois da carência', async () => {
     const room = novaSala();
     const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
     await ate(transmissor, doTipo('slot'), 'o slot');
@@ -546,8 +550,34 @@ describe('espectador', () => {
 
     naActivity.close();
 
-    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    // Logo após a queda nada é derrubado: a atividade ainda pode reconectar.
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS / 3));
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada após a carência')).toBeTruthy();
     expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
+  });
+
+  it('se a atividade reconectar dentro da carência, a transmissão e a aba de captura continuam', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    naActivity.close();
+    await fechou(naActivity);
+    const reconectada = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(reconectada, doTipo('state'), 'o estado após reconectar');
+
+    // Espera a carência original passar com folga.
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS * 2));
+
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+    expect(room.broadcasters.size).toBe(1);
   });
 
   it('ao chamar a rota /api/rooms/leave, as transmissões e abas de controle da pessoa são encerradas imediatamente', async () => {
