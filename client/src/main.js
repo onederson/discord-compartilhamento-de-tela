@@ -2988,53 +2988,23 @@ $('probe').addEventListener('click', async () => {
   }
 });
 
-// Encerramento imediato de segurança e privacidade ao fechar a atividade ou sair da chamada
+// Descarregar o iframe NÃO é sinal confiável de que a pessoa saiu da atividade.
+// O Discord recria o iframe sem a pessoa sair de lugar nenhum: ao levar a
+// atividade para o overlay quando um jogo ganha foco, ao recarregar depois de
+// um reset da GPU (jogos em tela cheia exclusiva trocam o modo de vídeo) ou
+// ao alternar entre a vista cheia e a janelinha. Mandar parar a transmissão e
+// fechar a aba de captura aqui derrubava quem estava jogando no instante em
+// que clicava no jogo. Aqui só se para o que morre junto com o iframe (a
+// captura interna). Quem decide se a pessoa saiu de verdade é o servidor:
+// o socket da atividade cai e, se não voltar dentro da carência
+// (VIEWER_GRACE_MS), a transmissão é encerrada e a aba fechada. Sair pelo
+// botão continua imediato, via limparSala.
 function aoSairDaAtividade() {
   try {
     myBroadcast?.stop();
     myBroadcast = null;
   } catch {
     /* ignora erro ao parar localmente */
-  }
-
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify({ type: 'stop-broadcast' }));
-      ws.send(JSON.stringify({ type: 'close-controls-broadcast' }));
-    } catch {
-      /* ignora erro ao enviar */
-    }
-  }
-
-  try {
-    const bc = new BroadcastChannel('discord-screenshare-focus');
-    bc.postMessage({ type: 'fechar-todas' });
-    bc.close();
-  } catch {
-    /* BroadcastChannel indisponível */
-  }
-
-  if (roomInfo?.id) {
-    try {
-      const url = `${P}/api/rooms/leave`;
-      const body = JSON.stringify({
-        roomId: roomInfo.id,
-        token: roomTokens?.viewerToken,
-        identity: session?.identity,
-      });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-      } else {
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {
-      /* ignora erro de envio de emergência */
-    }
   }
 }
 

@@ -283,14 +283,20 @@ describe('continuidade de quem assiste', () => {
     expect(JSON.parse(chamada[1].body).message).toContain('Falha de exemplo');
   });
 
-  it('envia o token correto da sala ao encerrar a Activity', async () => {
-    await entrar();
+  it('descarregar o iframe não encerra a transmissão nem fecha a aba de captura', async () => {
+    // O Discord recria o iframe sem a pessoa sair (overlay de jogo, reset da
+    // GPU). Quem decide que ela saiu é a carência do servidor.
+    const socket = await entrar();
     navigator.sendBeacon = vi.fn(() => true);
+    fetch.mockClear();
     window.dispatchEvent(new window.Event('pagehide'));
+    window.dispatchEvent(new window.Event('beforeunload'));
 
-    const [url, body] = navigator.sendBeacon.mock.calls[0];
-    expect(url).toBe('/api/rooms/leave');
-    expect(JSON.parse(await body.text()).token).toBe('viewer-sala-a');
+    expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/api/rooms/leave'))).toBe(false);
+    expect(
+      socket.sent.some((m) => m.type === 'close-controls-broadcast' || m.type === 'stop-broadcast'),
+    ).toBe(false);
   });
 
   it('encerra uma tentativa de conexão que nunca completa o handshake', async () => {

@@ -727,9 +727,23 @@ app.post('/api/rooms/leave', (req, res) => {
     return res.status(401).json({ error: 'Não autorizado.' });
   }
 
+  // Com carência, igual à queda do socket. Quem chama isto é o descarregamento
+  // do iframe (versões antigas da atividade ainda mandam), e o Discord recria
+  // o iframe sem a pessoa sair: ao levar a atividade para o overlay quando um
+  // jogo ganha foco, ou ao recarregá-la depois de um reset da GPU. Encerrar
+  // aqui na hora derrubava a transmissão e fechava a aba no clique no jogo.
+  // Se a atividade voltar, attachViewer cancela; se não, encerra depois.
   const room = roomId ? R.getRoom(roomId) : null;
   if (room) {
-    R.encerrarPresenca(room, auth.uid, 'Você saiu da atividade, então a transmissão parou.');
+    R.agendarEncerramentoPresenca(
+      room,
+      auth.uid,
+      'Você saiu da atividade, então a transmissão parou.',
+      VIEWER_GRACE_MS,
+      (paradas) => {
+        diagnostico.log('presence.end', { reason: 'leave-beacon', streams: paradas });
+      },
+    );
   }
 
   res.json({ ok: true });
@@ -1478,6 +1492,7 @@ function handleViewer(ws, room, auth) {
         'Você saiu da atividade, então a transmissão parou.',
         VIEWER_GRACE_MS,
         (paradas) => {
+          diagnostico.log('presence.end', { reason: 'viewer-grace-expired', streams: paradas });
           if (paradas) {
             logDev(
               `[room ${room.id}] ${auth.name} saiu da atividade — ${paradas} transmissão(ões) encerrada(s)`,

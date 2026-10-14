@@ -580,7 +580,7 @@ describe('espectador', () => {
     expect(room.broadcasters.size).toBe(1);
   });
 
-  it('ao chamar a rota /api/rooms/leave, as transmissões e abas de controle da pessoa são encerradas imediatamente', async () => {
+  it('a rota /api/rooms/leave respeita a carência e encerra só se a atividade não voltar', async () => {
     const room = novaSala();
     const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
     await ate(transmissor, doTipo('slot'), 'o slot');
@@ -594,8 +594,39 @@ describe('espectador', () => {
       body: JSON.stringify({ token: tokenDe(room.id, 'viewer', 'u1') }),
     });
     expect(res.status).toBe(200);
+    naActivity.close();
 
-    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS / 3));
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada após a carência')).toBeTruthy();
     expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
+  });
+
+  it('o Discord recriando o iframe (beacon de saída + reconexão) não derruba quem está jogando', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    // Versões antigas da atividade mandam o beacon ao descarregar o iframe.
+    await fetch(`http://127.0.0.1:${server.address().port}/api/rooms/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenDe(room.id, 'viewer', 'u1') }),
+    });
+    naActivity.close();
+    await fechou(naActivity);
+    const recriada = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(recriada, doTipo('state'), 'o estado da atividade recriada');
+
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS * 2));
+
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+    expect(room.broadcasters.size).toBe(1);
   });
 });

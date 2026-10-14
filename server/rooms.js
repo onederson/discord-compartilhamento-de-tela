@@ -42,10 +42,13 @@ export const SEM_PRESENCA_MS = 60 * 1000;
 export const BROADCASTER_GRACE_MS = 15 * 1000;
 // Quanto o servidor espera, depois que o último socket de espectador de alguém
 // cai, antes de encerrar a transmissão e mandar a aba de captura se fechar.
-// Uma oscilação de rede ou o reset do gateway do Discord derruba e refaz esse
-// socket em segundos; sair de verdade da atividade continua sendo detectado,
-// só que com esta folga (e imediatamente via /api/rooms/leave).
-export const VIEWER_GRACE_MS = 15 * 1000;
+// Uma oscilação de rede, o reset do gateway do Discord ou o próprio Discord
+// recriando o iframe (overlay de jogo, reset da GPU ao entrar num jogo em tela
+// cheia) derruba e refaz esse socket. A volta inclui reautenticar e o backoff
+// de reconexão da atividade (até 15s entre tentativas), então 15s era curto.
+// Sair de verdade continua sendo detectado, só que com esta folga; sair pelo
+// botão da atividade continua imediato.
+export const VIEWER_GRACE_MS = 30 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -432,7 +435,7 @@ export function encerrarPresenca(
   }
   for (const wsControl of [...room.controles]) {
     if (wsControl.__controlOf === userId) {
-      sendJson(wsControl, { type: 'close-request' });
+      sendJson(wsControl, { type: 'close-request', motivo });
       detachControl(room, wsControl);
     }
   }
