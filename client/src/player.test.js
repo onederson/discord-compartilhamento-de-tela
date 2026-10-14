@@ -16,7 +16,11 @@ class DecoderFalso {
     this.state = 'configured';
   }
 
-  decode() {}
+  decodeQueueSize = 0;
+
+  decode() {
+    this.decodificados = (this.decodificados ?? 0) + 1;
+  }
 
   close() {
     this.state = 'closed';
@@ -97,5 +101,38 @@ describe('player', () => {
     decoders.at(-1).init.output(frame());
 
     expect(onFrame).toHaveBeenCalledTimes(2);
+  });
+
+  it('descarta quadros e pede keyframe quando a fila do decoder engasga', () => {
+    const onResync = vi.fn();
+    const player = createPlayer(document.createElement('canvas'), { onResync });
+    player.start(config);
+    const decoder = decoders.at(-1);
+
+    player.push(pacote(1));
+    decoder.decodeQueueSize = 1000;
+    player.push(pacote(2));
+    player.push(pacote(2));
+
+    expect(decoder.decodificados).toBe(1);
+    expect(onResync).toHaveBeenCalledOnce();
+  });
+
+  it('não decodifica com a aba oculta e volta só a partir de um keyframe', () => {
+    const player = createPlayer(document.createElement('canvas'));
+    player.start(config);
+    const decoder = decoders.at(-1);
+    const visibilidade = vi.spyOn(document, 'visibilityState', 'get');
+
+    visibilidade.mockReturnValue('hidden');
+    player.push(pacote(1));
+    expect(decoder.decodificados).toBeUndefined();
+
+    visibilidade.mockReturnValue('visible');
+    player.push(pacote(2));
+    expect(decoder.decodificados).toBeUndefined();
+    player.push(pacote(1));
+    expect(decoder.decodificados).toBe(1);
+    visibilidade.mockRestore();
   });
 });

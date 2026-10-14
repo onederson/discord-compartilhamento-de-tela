@@ -13,7 +13,11 @@ import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
 import { createNativeAudioBridge, packNativeAudio } from './native-audio.js';
 import { createNativeAudioAuthorizer, startNativeAudioLocalServer } from './native-audio-auth.js';
-import { createDiagnosticLogger, diagnosticoLigado } from '../scripts/diagnostics.mjs';
+import {
+  createDiagnosticLogger,
+  diagnosticoLigado,
+  lerDiagnostico,
+} from '../scripts/diagnostics.mjs';
 import { servidoresPermitidos, permitirWeb } from '../scripts/env.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -22,6 +26,24 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const diagnostico = createDiagnosticLogger({
   raiz: path.join(__dirname, '..'),
   habilitado: process.env.NODE_ENV !== 'test' && diagnosticoLigado(process.env.DIAGNOSTICO_LOCAL),
+});
+
+// Pseudônimo estável da pessoa no diagnóstico: dá para seguir a mesma pessoa
+// de um evento a outro (atividade, aba de captura, transmissão) sem gravar o
+// id do Discord nem o nome.
+const pessoa = (uid) =>
+  crypto.createHash('sha256').update(String(uid)).digest('base64url').slice(0, 8);
+
+// Todo caminho que derruba a transmissão de alguém e fecha a aba de captura
+// passa por encerrarPresenca; aqui fica registrado qual deles foi.
+R.aoEncerrarPresenca(({ room, userId, origem, streams, abas }) => {
+  diagnostico.log('presence.close', {
+    sala: room.id,
+    pessoa: pessoa(userId),
+    origem,
+    streams,
+    abas,
+  });
 });
 
 const {
@@ -734,6 +756,11 @@ app.post('/api/rooms/leave', (req, res) => {
   // aqui na hora derrubava a transmissão e fechava a aba no clique no jogo.
   // Se a atividade voltar, attachViewer cancela; se não, encerra depois.
   const room = roomId ? R.getRoom(roomId) : null;
+  diagnostico.log('presence.leave-beacon', {
+    sala: roomId ?? null,
+    pessoa: pessoa(auth.uid),
+    salaExiste: Boolean(room),
+  });
   if (room) {
     R.agendarEncerramentoPresenca(
       room,
@@ -741,7 +768,12 @@ app.post('/api/rooms/leave', (req, res) => {
       'Você saiu da atividade, então a transmissão parou.',
       VIEWER_GRACE_MS,
       (paradas) => {
-        diagnostico.log('presence.end', { reason: 'leave-beacon', streams: paradas });
+        diagnostico.log('presence.end', {
+          reason: 'leave-beacon',
+          sala: room.id,
+          pessoa: pessoa(auth.uid),
+          streams: paradas,
+        });
       },
     );
   }
@@ -987,8 +1019,21 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
 // Rate limit leve para evitar spam de logs, reaproveitando a lógica de janelas
 const logAttempts = new Map();
-app.post('/api/logs', (req, res) => {
-  const { level = 'error', message, details } = req.body ?? {};
+// Eventos que a atividade pode registrar com nome próprio, para o diagnóstico
+// separar uma queda do iframe de um erro comum sem precisar ler a mensagem.
+const EVENTOS_CLIENTE = new Set(['crash-suspeito', 'unload', 'decoder', 'fila', 'memoria']);
+
+app.post('/api/logs', express.text({ type: 'text/plain', limit: '64kb' }), (req, res) => {
+  // O sendBeacon do pagehide chega como text/plain: é o tipo que não exige
+  // preflight, e não há tempo para um preflight com o iframe morrendo.
+  if (typeof req.body === 'string') {
+    try {
+      req.body = JSON.parse(req.body);
+    } catch {
+      return res.status(400).end();
+    }
+  }
+  const { level = 'error', message, details, event } = req.body ?? {};
   if (
     !['error', 'warn', 'info'].includes(level) ||
     typeof message !== 'string' ||
@@ -1017,7 +1062,8 @@ app.post('/api/logs', (req, res) => {
 
   // Escreve no log assincronamente sem travar o servidor
   if (diagnostico.habilitado) {
-    setImmediate(() => diagnostico.log('client.error', { level, message, details }));
+    const nome = EVENTOS_CLIENTE.has(event) ? `client.${event}` : 'client.error';
+    setImmediate(() => diagnostico.log(nome, { level, message, details }));
   }
 
   res.json({ ok: true });
@@ -1072,6 +1118,12 @@ app.post('/api/admin/logout', (_req, res) => {
   );
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true });
+});
+
+// O diagnóstico mora no disco do servidor (Square Cloud), longe de quem
+// investiga. Daqui o admin baixa o final dele sem abrir o painel da hospedagem.
+app.get('/api/admin/diagnostico', requireAdmin, (_req, res) => {
+  res.type('application/x-ndjson').send(lerDiagnostico(diagnostico.arquivo));
 });
 
 app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
@@ -1203,6 +1255,7 @@ wss.on('connection', (ws, _req, auth, fonte, controle, substituir) => {
     return;
   }
 
+  ws.__papel = auth.role !== 'broadcaster' ? 'atividade' : controle ? 'aba-captura' : 'transmissao';
   if (auth.role === 'broadcaster' && controle) {
     handleControl(ws, room, auth);
   } else if (auth.role === 'broadcaster') {
@@ -1231,10 +1284,20 @@ function handleControl(ws, room, auth) {
   logDev(`[room ${room.id}] aba de captura de ${auth.name} conectada`);
 
   R.broadcastState(room);
+  diagnostico.log('control.connect', { sala: room.id, pessoa: pessoa(auth.uid) });
 
-  const sair = () => {
+  let saiu = false;
+  const sair = (code) => {
+    if (saiu) return;
+    saiu = true;
     R.detachControl(room, ws);
     R.broadcastState(room);
+    diagnostico.log('control.disconnect', {
+      sala: room.id,
+      pessoa: pessoa(auth.uid),
+      code: typeof code === 'number' ? code : null,
+      duracaoS: Math.round((Date.now() - (ws.__connectedAt ?? Date.now())) / 1000),
+    });
   };
   ws.on('close', sair);
   ws.on('error', sair);
@@ -1362,6 +1425,15 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
 
   ws.on('close', (code) => {
     stopNativeAudio();
+    diagnostico.log('broadcaster.disconnect', {
+      sala: room.id,
+      pessoa: pessoa(info.id),
+      fonte,
+      code,
+      explicito: Boolean(ws.__explicitStop),
+      duracaoS: Math.round((Date.now() - (ws.__connectedAt ?? Date.now())) / 1000),
+      atividadeConectada: R.temViewer(room, info.id),
+    });
     if (ws.__explicitStop || code === 1000 || code === 1005) {
       R.detachBroadcaster(room, ws);
     } else {
@@ -1372,7 +1444,14 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
 }
 
 function handleViewer(ws, room, auth) {
+  const voltouNaCarencia = Boolean(room.presencaTimers?.has(auth.uid));
   R.attachViewer(room, ws, { id: auth.uid, name: auth.name, avatar: auth.av ?? null });
+  diagnostico.log('viewer.connect', {
+    sala: room.id,
+    pessoa: pessoa(auth.uid),
+    voltouNaCarencia,
+    transmitindo: R.broadcastersOf(room, auth.uid).length,
+  });
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
@@ -1454,6 +1533,13 @@ function handleViewer(ws, room, auth) {
       const n = R.toControls(room, auth.uid, { type: 'close-request' });
       const alvos = R.broadcastersOf(room, auth.uid);
       for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
+      diagnostico.log('control.close-request', {
+        origem: 'atividade',
+        sala: room.id,
+        pessoa: pessoa(auth.uid),
+        abas: n,
+        streams: alvos.length,
+      });
       for (const wsControl of [...room.controles]) {
         if (wsControl.__controlOf === auth.uid) {
           R.detachControl(room, wsControl);
@@ -1471,6 +1557,13 @@ function handleViewer(ws, room, auth) {
       const alvos = R.broadcastersOf(room, auth.uid, fonte);
 
       for (const entry of alvos) R.sendJson(entry.ws, { type: 'stop-request' });
+      diagnostico.log('broadcast.stop-request', {
+        origem: 'atividade',
+        sala: room.id,
+        pessoa: pessoa(auth.uid),
+        fonte,
+        streams: alvos.length,
+      });
       if (alvos.length) {
         logDev(
           `[room ${room.id}] parada pedida por ${auth.name}: ${alvos.map((e) => e.fonte).join(', ')}`,
@@ -1479,9 +1572,26 @@ function handleViewer(ws, room, auth) {
     }
   });
 
-  const aoDesconectarViewer = () => {
+  // close e error podem chegar os dois para o mesmo socket.
+  let desconectou = false;
+  const aoDesconectarViewer = (code, motivo) => {
+    if (desconectou) return;
+    desconectou = true;
     R.detachViewer(room, ws);
-    if (!R.temViewer(room, auth.uid)) {
+    const semAtividade = !R.temViewer(room, auth.uid);
+    diagnostico.log('viewer.disconnect', {
+      sala: room.id,
+      pessoa: pessoa(auth.uid),
+      // 1001 = iframe descarregado; 1006 = sumiu sem fechar (processo do
+      // iframe morto ou rede); 1000/1005 = fechou de propósito.
+      code: typeof code === 'number' ? code : null,
+      motivo: Buffer.isBuffer(motivo) ? motivo.toString('utf8').slice(0, 120) : null,
+      erro: code instanceof Error ? code.message : null,
+      duracaoS: Math.round((Date.now() - (ws.__connectedAt ?? Date.now())) / 1000),
+      semAtividade,
+      transmitindo: R.broadcastersOf(room, auth.uid).length,
+    });
+    if (semAtividade) {
       // Com carência: o socket da atividade cai e volta em segundos numa
       // oscilação de rede ou reset do gateway do Discord, e derrubar a captura
       // aqui matava a transmissão e fechava a aba por um falso "saiu". Se a
@@ -1492,7 +1602,13 @@ function handleViewer(ws, room, auth) {
         'Você saiu da atividade, então a transmissão parou.',
         VIEWER_GRACE_MS,
         (paradas) => {
-          diagnostico.log('presence.end', { reason: 'viewer-grace-expired', streams: paradas });
+          diagnostico.log('presence.end', {
+            reason: 'viewer-grace-expired',
+            sala: room.id,
+            pessoa: pessoa(auth.uid),
+            graceMs: VIEWER_GRACE_MS,
+            streams: paradas,
+          });
           if (paradas) {
             logDev(
               `[room ${room.id}] ${auth.name} saiu da atividade — ${paradas} transmissão(ões) encerrada(s)`,
@@ -1518,6 +1634,10 @@ const heartbeat = setInterval(() => {
     // Dois ciclos sem pong antes de derrubar: uma única resposta atrasada
     // (encoder pesado, GC, rede saturada) não é motivo para matar a conexão.
     if (ws.__missedPongs >= 2) {
+      diagnostico.log('ws.heartbeat-timeout', {
+        papel: ws.__papel ?? 'desconhecido',
+        duracaoS: Math.round((Date.now() - (ws.__connectedAt ?? Date.now())) / 1000),
+      });
       ws.terminate();
       continue;
     }

@@ -292,11 +292,34 @@ describe('continuidade de quem assiste', () => {
     window.dispatchEvent(new window.Event('pagehide'));
     window.dispatchEvent(new window.Event('beforeunload'));
 
-    expect(navigator.sendBeacon).not.toHaveBeenCalled();
+    // O único beacon permitido é o da caixa-preta, para o diagnóstico.
+    expect(navigator.sendBeacon.mock.calls.map(([url]) => url)).toEqual(['/api/logs']);
     expect(fetch.mock.calls.some(([url]) => String(url).includes('/api/rooms/leave'))).toBe(false);
     expect(
       socket.sent.some((m) => m.type === 'close-controls-broadcast' || m.type === 'stop-broadcast'),
     ).toBe(false);
+  });
+
+  it('o arranque seguinte denuncia a atividade que morreu sem pagehide', async () => {
+    // Esta página entra na sala e "morre" sem pagehide — o processo do iframe
+    // derrubado, como no "Recarregar atividade" do Discord. O próximo
+    // arranque acha a trilha aberta e a envia.
+    const socket = await entrar();
+    socket.close?.();
+    window.dispatchEvent(new window.Event('blur'));
+    fetch.mockClear();
+
+    vi.resetModules();
+    await import('./main.js');
+
+    const relato = fetch.mock.calls
+      .filter(([url]) => String(url).endsWith('/api/logs'))
+      .map(([, init]) => JSON.parse(init.body))
+      .find((b) => b.event === 'crash-suspeito');
+    expect(relato).toBeDefined();
+    expect(relato.details.trilha.join('\n')).toMatch(
+      /sala\.entrou[\s\S]*ws\.open[\s\S]*janela\.blur/,
+    );
   });
 
   it('encerra uma tentativa de conexão que nunca completa o handshake', async () => {

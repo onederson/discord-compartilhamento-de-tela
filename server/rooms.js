@@ -412,6 +412,18 @@ function countPeople(room) {
  * O `stop-request` faz a aba encerrar por conta própria e dizer o motivo. O
  * `detachBroadcaster` vem junto e não depende dela: uma aba travada, ou que
  * perdeu o socket, não pode continuar segurando a tela no ar.
+ */
+let observarEncerramento = null;
+
+/**
+ * Avisa quem quiser registrar cada encerramento de presença. É por aqui que o
+ * diagnóstico descobre qual dos caminhos (carência, beacon, varredura sem
+ * presença) derrubou a transmissão de alguém.
+ */
+export function aoEncerrarPresenca(fn) {
+  observarEncerramento = fn;
+}
+
 /**
  * Encerra imediatamente as transmissões e abas de controle de quem saiu da atividade.
  */
@@ -419,6 +431,7 @@ export function encerrarPresenca(
   room,
   userId,
   motivo = 'Você saiu da atividade, então a transmissão parou.',
+  origem = 'direto',
 ) {
   cancelarEncerramentoPresenca(room, userId);
   const alvos = broadcastersOf(room, userId);
@@ -433,13 +446,22 @@ export function encerrarPresenca(
     });
     detachBroadcaster(room, entry.ws);
   }
+  let abas = 0;
   for (const wsControl of [...room.controles]) {
     if (wsControl.__controlOf === userId) {
       sendJson(wsControl, { type: 'close-request', motivo });
       detachControl(room, wsControl);
+      abas++;
     }
   }
   broadcastState(room);
+  if (alvos.length || abas) {
+    try {
+      observarEncerramento?.({ room, userId, origem, streams: alvos.length, abas });
+    } catch {
+      /* diagnóstico nunca derruba o encerramento */
+    }
+  }
   return alvos.length;
 }
 
@@ -475,7 +497,7 @@ export function agendarEncerramentoPresenca(
   if (!temAlgo) return false;
 
   if (graceMs <= 0) {
-    const paradas = encerrarPresenca(room, userId, motivo);
+    const paradas = encerrarPresenca(room, userId, motivo, 'sem-carencia');
     aoEncerrar?.(paradas);
     return true;
   }
@@ -486,7 +508,7 @@ export function agendarEncerramentoPresenca(
     room.presencaTimers.delete(userId);
     // A sala pode ter fechado, ou a pessoa voltado por outro caminho.
     if (rooms.get(room.id) !== room || temViewer(room, userId)) return;
-    const paradas = encerrarPresenca(room, userId, motivo);
+    const paradas = encerrarPresenca(room, userId, motivo, 'carencia-expirou');
     aoEncerrar?.(paradas);
   }, graceMs);
   timer.unref?.();
@@ -507,7 +529,12 @@ function derrubarAbandonadas(room, now) {
     if (now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
 
     logDev(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
-    encerrarPresenca(room, entry.info.id, 'Você saiu da atividade, então a transmissão parou.');
+    encerrarPresenca(
+      room,
+      entry.info.id,
+      'Você saiu da atividade, então a transmissão parou.',
+      'sem-presenca',
+    );
   }
 }
 
