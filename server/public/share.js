@@ -311,6 +311,7 @@ function atenderPedido(fonte, novas) {
  */
 let controle = null;
 let religar = null;
+let avisoAtividade = false;
 
 function ligarControle() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -389,6 +390,22 @@ function ligarControle() {
         } catch {
           // Notificação do sistema indisponível ou bloqueada pelo SO.
         }
+      }
+    } else if (msg.type === 'atividade-fechada') {
+      // O Discord fechou a atividade (há máquinas em que basta focar um jogo),
+      // mas a tela segue no ar para quem assiste. Sem este aviso, a pessoa não
+      // teria onde ver que continua transmitindo.
+      mostrarControle('Atividade fechada — você continua ao vivo', 'reconnecting');
+      $('pageStatus').textContent =
+        'O Discord fechou a atividade, mas a transmissão continua para quem está na sala. Reabra a atividade para voltar a assistir, ou pare a transmissão aqui.';
+      $('pageStatus').className = 'status aviso';
+      avisoAtividade = true;
+    } else if (msg.type === 'atividade-voltou') {
+      mostrarControle('Conectado à sala', 'connected');
+      if (avisoAtividade) {
+        $('pageStatus').textContent = '';
+        $('pageStatus').className = 'status';
+        avisoAtividade = false;
       }
     } else if (msg.type === 'close-request') {
       fecharAba(msg.motivo);

@@ -5,6 +5,7 @@ import { withTimeout } from './async.js';
 import { enterImmersive, fullscreenElement, leaveImmersive } from './immersive.js';
 import { canCaptureScreen, defaultBroadcastQuality, isMobileClient } from './platform.js';
 import { recoverableSlots, shouldRecoverStream } from './recovery.js';
+import { createCaixaPreta } from './caixa-preta.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,7 +24,13 @@ const P = inDiscord ? '/.proxy' : '';
 
 let logWindow = 0;
 let logCount = 0;
-function reportLog(level, message, details = {}) {
+/**
+ * @param {string} [event] nome próprio no diagnóstico do servidor
+ *   (crash-suspeito, unload, decoder, fila, memoria); sem ele vira client.error.
+ * @param {{beacon?: boolean}} [opcoes] beacon para quando a página está
+ *   morrendo e um fetch comum seria cancelado no meio.
+ */
+function reportLog(level, message, details = {}, event = undefined, { beacon = false } = {}) {
   const now = Date.now();
   if (now - logWindow >= 60_000) {
     logWindow = now;
@@ -33,17 +40,53 @@ function reportLog(level, message, details = {}) {
   logCount++;
   let body;
   try {
-    body = JSON.stringify({ level, message: String(message).slice(0, 2_000), details });
+    body = JSON.stringify({ level, message: String(message).slice(0, 2_000), details, event });
   } catch {
     return;
+  }
+  if (beacon && navigator.sendBeacon) {
+    // text/plain não tem preflight: é o único tipo que sai a tempo no pagehide.
+    try {
+      if (navigator.sendBeacon(`${P}/api/logs`, new Blob([body], { type: 'text/plain' }))) return;
+    } catch {
+      /* cai no fetch abaixo */
+    }
   }
   // Fire and forget log endpoint
   fetch(`${P}/api/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
+    keepalive: beacon,
     signal: AbortSignal.timeout(5_000),
   }).catch(() => {});
+}
+
+// Ver caixa-preta.js. Inicia antes de tudo para pegar até um arranque que trave.
+const caixaPreta = createCaixaPreta({
+  storage: (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })(),
+});
+{
+  const { anterior, morreuSemAviso } = caixaPreta.iniciar({
+    discord: inDiscord,
+    movel: clienteMovel,
+    ua: navigator.userAgent.match(/(Discord|Chrome|Firefox|Safari)\/[\d.]+/g)?.join(' ') ?? null,
+  });
+  if (morreuSemAviso) {
+    const r = caixaPreta.resumo(anterior);
+    reportLog(
+      'error',
+      'A atividade anterior morreu sem descarregar (iframe derrubado, falta de memória ou GPU)',
+      r,
+      'crash-suspeito',
+    );
+  }
 }
 
 const originalConsoleError = console.error;
@@ -63,10 +106,20 @@ console.error = function (...args) {
 };
 
 window.addEventListener('error', (e) => {
-  reportLog('error', e.message, { filename: e.filename, lineno: e.lineno, colno: e.colno });
+  caixaPreta.registrar('js.erro', { msg: e.message, linha: e.lineno });
+  reportLog('error', e.message, {
+    filename: e.filename,
+    lineno: e.lineno,
+    colno: e.colno,
+    stack: e.error?.stack?.slice(0, 1_500),
+  });
 });
 window.addEventListener('unhandledrejection', (e) => {
-  reportLog('error', 'Unhandled Promise Rejection', { reason: String(e.reason) });
+  caixaPreta.registrar('js.rejeicao', { msg: e.reason?.message ?? String(e.reason) });
+  reportLog('error', 'Unhandled Promise Rejection', {
+    reason: String(e.reason),
+    stack: e.reason?.stack?.slice(0, 1_500),
+  });
 });
 
 // Um decoder e um canvas por transmissor, indexados pelo slot que o servidor
@@ -1127,6 +1180,12 @@ function openStream(slot, userId) {
       onFrame: () => {
         s.lastFrameAt = Date.now();
       },
+      onAviso: (tipo, dados) => {
+        caixaPreta.registrar(`video.${tipo}`, { slot, ...dados });
+        if (tipo === 'decoder-erro' || tipo === 'fila-cheia') {
+          reportLog('warn', `Player: ${tipo}`, { slot, ...dados }, 'decoder');
+        }
+      },
     }),
     // Só nasce quando a transmissão anuncia que tem som — nem toda tem.
     audio: null,
@@ -1743,6 +1802,7 @@ function setRoomUrl(id) {
 }
 
 function openRoom(tokens, room) {
+  caixaPreta.registrar('sala.entrou');
   roomTokens = tokens;
   roomInfo = room;
 
@@ -1978,6 +2038,7 @@ function connect() {
 
   socket.addEventListener('open', () => {
     if (ws !== socket) return;
+    caixaPreta.registrar('ws.open');
     clearTimeout(connectionTimer);
     connectionTimer = null;
     cancelarGracePeriodViewer();
@@ -2101,6 +2162,7 @@ function connect() {
       watching.delete(msg.slot);
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
+      caixaPreta.registrar('sala.sumiu');
       roomTokens = null;
       // No Discord a sala é a da call: ela é recriada e a atividade volta para
       // ela. No site, quem some é a sala escolhida, então o lugar é a lista.
@@ -2118,6 +2180,7 @@ function connect() {
 
   socket.addEventListener('close', async (e) => {
     if (ws !== socket) return;
+    caixaPreta.registrar('ws.close', { code: e.code, abriu, visivel: document.visibilityState });
     clearTimeout(connectionTimer);
     connectionTimer = null;
     ws = null;
@@ -2988,7 +3051,17 @@ $('probe').addEventListener('click', async () => {
   }
 });
 
-// Encerramento imediato de segurança e privacidade ao fechar a atividade ou sair da chamada
+// Descarregar o iframe NÃO é sinal confiável de que a pessoa saiu da atividade.
+// O Discord recria o iframe sem a pessoa sair de lugar nenhum: ao levar a
+// atividade para o overlay quando um jogo ganha foco, ao recarregar depois de
+// um reset da GPU (jogos em tela cheia exclusiva trocam o modo de vídeo) ou
+// ao alternar entre a vista cheia e a janelinha. Mandar parar a transmissão e
+// fechar a aba de captura aqui derrubava quem estava jogando no instante em
+// que clicava no jogo. Aqui só se para o que morre junto com o iframe (a
+// captura interna). Quem decide se a pessoa saiu de verdade é o servidor:
+// o socket da atividade cai e, se não voltar dentro da carência
+// (VIEWER_GRACE_MS), a transmissão é encerrada e a aba fechada. Sair pelo
+// botão continua imediato, via limparSala.
 function aoSairDaAtividade() {
   try {
     myBroadcast?.stop();
@@ -2996,47 +3069,82 @@ function aoSairDaAtividade() {
   } catch {
     /* ignora erro ao parar localmente */
   }
-
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify({ type: 'stop-broadcast' }));
-      ws.send(JSON.stringify({ type: 'close-controls-broadcast' }));
-    } catch {
-      /* ignora erro ao enviar */
-    }
-  }
-
-  try {
-    const bc = new BroadcastChannel('discord-screenshare-focus');
-    bc.postMessage({ type: 'fechar-todas' });
-    bc.close();
-  } catch {
-    /* BroadcastChannel indisponível */
-  }
-
-  if (roomInfo?.id) {
-    try {
-      const url = `${P}/api/rooms/leave`;
-      const body = JSON.stringify({
-        roomId: roomInfo.id,
-        token: roomTokens?.viewerToken,
-        identity: session?.identity,
-      });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-      } else {
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {
-      /* ignora erro de envio de emergência */
-    }
-  }
 }
 
 window.addEventListener('beforeunload', aoSairDaAtividade);
 window.addEventListener('pagehide', aoSairDaAtividade);
+
+// ------------------------------------------------------------ caixa-preta
+
+// Iframe descarregado de forma limpa: a trilha sai agora, por beacon, e a
+// próxima abertura não a confunde com um crash. Se o processo morrer sem
+// chegar aqui, quem envia é o arranque seguinte (ver caixaPreta.iniciar).
+window.addEventListener('pagehide', (e) => {
+  const r = caixaPreta.encerrar(e.persisted ? 'pagehide-cache' : 'pagehide');
+  if (r && inRoom()) {
+    reportLog('info', 'Atividade descarregada', r, 'unload', { beacon: true });
+  }
+});
+
+// Clicar no jogo aparece aqui como blur (e, se o Discord ocultar a atividade,
+// visibilitychange). É a linha do tempo que diz o que veio antes da queda.
+window.addEventListener('blur', () => caixaPreta.registrar('janela.blur'));
+window.addEventListener('focus', () => caixaPreta.registrar('janela.focus'));
+document.addEventListener('visibilitychange', () =>
+  caixaPreta.registrar('visibilidade', { estado: document.visibilityState }),
+);
+document.addEventListener('freeze', () => caixaPreta.registrar('pagina.congelada'));
+document.addEventListener('resume', () => caixaPreta.registrar('pagina.retomada'));
+window.addEventListener('pageshow', (e) =>
+  caixaPreta.registrar('pageshow', { doCache: e.persisted }),
+);
+window.addEventListener('offline', () => caixaPreta.registrar('rede.offline'));
+window.addEventListener('online', () => caixaPreta.registrar('rede.online'));
+let redimensionarTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(redimensionarTimer);
+  redimensionarTimer = setTimeout(
+    () => caixaPreta.registrar('janela.tamanho', { w: innerWidth, h: innerHeight }),
+    500,
+  );
+});
+
+// Travamento do thread principal: o Discord mostra "Recarregar atividade"
+// também quando o iframe para de responder, não só quando morre.
+try {
+  new PerformanceObserver((lista) => {
+    for (const t of lista.getEntries()) {
+      if (t.duration >= 1_000) caixaPreta.registrar('tarefa.longa', { ms: Math.round(t.duration) });
+    }
+  }).observe({ type: 'longtask', buffered: false });
+} catch {
+  /* longtask indisponível neste navegador */
+}
+
+// Amostra de saúde: memória (Chromium) e fila dos decoders. Fica só na trilha;
+// vai ao servidor na hora apenas quando a memória já está perto do teto.
+let ultimoAlertaMemoria = 0;
+setInterval(() => {
+  if (!inRoom()) return;
+  const mem = performance.memory;
+  const usadoMb = mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null;
+  const limiteMb = mem ? Math.round(mem.jsHeapSizeLimit / 1_048_576) : null;
+  let fila = 0;
+  for (const s of streams.values()) fila = Math.max(fila, s.player.getFila?.() ?? 0);
+  caixaPreta.registrar('saude', {
+    memMb: usadoMb,
+    fila,
+    streams: streams.size,
+    visivel: document.visibilityState === 'visible',
+    foco: document.hasFocus(),
+  });
+  if (
+    usadoMb &&
+    limiteMb &&
+    usadoMb > limiteMb * 0.8 &&
+    Date.now() - ultimoAlertaMemoria > 300_000
+  ) {
+    ultimoAlertaMemoria = Date.now();
+    reportLog('warn', 'Memória da atividade perto do limite', caixaPreta.resumo(), 'memoria');
+  }
+}, 30_000);

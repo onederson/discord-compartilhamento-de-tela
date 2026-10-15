@@ -40,6 +40,15 @@ const EMPTY_GRACE_MS = 12 * 1000;
 // 60s protege contra resets e reconexões do gateway de voz do Discord sem derrubar a tela.
 export const SEM_PRESENCA_MS = 60 * 1000;
 export const BROADCASTER_GRACE_MS = 15 * 1000;
+// Quanto o servidor espera, depois que o último socket de espectador de alguém
+// cai, antes de encerrar a transmissão e mandar a aba de captura se fechar.
+// Uma oscilação de rede, o reset do gateway do Discord ou o próprio Discord
+// recriando o iframe (overlay de jogo, reset da GPU ao entrar num jogo em tela
+// cheia) derruba e refaz esse socket. A volta inclui reautenticar e o backoff
+// de reconexão da atividade (até 15s entre tentativas), então 15s era curto.
+// Sair de verdade continua sendo detectado, só que com esta folga; sair pelo
+// botão da atividade continua imediato.
+export const VIEWER_GRACE_MS = 30 * 1000;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -185,6 +194,27 @@ export function toControls(room, userId, obj) {
   return entregues;
 }
 
+/**
+ * A transmissão de quem está sem a atividade pode seguir no ar.
+ *
+ * O Discord de algumas máquinas descarrega o iframe da atividade quando a
+ * pessoa foca um jogo, sem ela ter saído de nada. A aba de captura continua
+ * viva, com o aviso de compartilhamento do próprio navegador na frente dela,
+ * então derrubar a tela aqui punia quem assiste por uma decisão do Discord.
+ *
+ * Só vale enquanto houver alguém na sala: sem plateia, segurar a tela no ar
+ * seria o vazamento que `encerrarPresenca` existe para evitar.
+ */
+function capturaSegura(room, userId) {
+  return room.viewers.size > 0 && countControls(room, userId) > 0;
+}
+
+function avisarCaptura(room, userId, type) {
+  for (const ws of room.controles) {
+    if (ws.__controlOf === userId) sendJson(ws, { type });
+  }
+}
+
 /** Conta quantas abas de controle uma pessoa tem abertas. */
 export function countControls(room, userId) {
   let count = 0;
@@ -299,6 +329,7 @@ export function createRoom({
     slots: new Map(),
     viewers: new Set(),
     controles: new Set(),
+    presencaTimers: new Map(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -346,6 +377,7 @@ export function ensureCallRoom(instance, id, metadata = {}) {
     slots: new Map(),
     viewers: new Set(),
     controles: new Set(),
+    presencaTimers: new Map(),
     droppedChunks: 0,
     traffic: trafficCounter(),
   };
@@ -401,6 +433,18 @@ function countPeople(room) {
  * O `stop-request` faz a aba encerrar por conta própria e dizer o motivo. O
  * `detachBroadcaster` vem junto e não depende dela: uma aba travada, ou que
  * perdeu o socket, não pode continuar segurando a tela no ar.
+ */
+let observarEncerramento = null;
+
+/**
+ * Avisa quem quiser registrar cada encerramento de presença. É por aqui que o
+ * diagnóstico descobre qual dos caminhos (carência, beacon, varredura sem
+ * presença) derrubou a transmissão de alguém.
+ */
+export function aoEncerrarPresenca(fn) {
+  observarEncerramento = fn;
+}
+
 /**
  * Encerra imediatamente as transmissões e abas de controle de quem saiu da atividade.
  */
@@ -408,7 +452,10 @@ export function encerrarPresenca(
   room,
   userId,
   motivo = 'Você saiu da atividade, então a transmissão parou.',
+  origem = 'direto',
 ) {
+  cancelarEncerramentoPresenca(room, userId);
+  room.semAtividade?.delete(userId);
   const alvos = broadcastersOf(room, userId);
   for (const entry of alvos) {
     if (entry.graceTimer) {
@@ -421,19 +468,91 @@ export function encerrarPresenca(
     });
     detachBroadcaster(room, entry.ws);
   }
+  let abas = 0;
   for (const wsControl of [...room.controles]) {
     if (wsControl.__controlOf === userId) {
-      sendJson(wsControl, { type: 'close-request' });
+      sendJson(wsControl, { type: 'close-request', motivo });
       detachControl(room, wsControl);
+      abas++;
     }
   }
   broadcastState(room);
+  if (alvos.length || abas) {
+    try {
+      observarEncerramento?.({ room, userId, origem, streams: alvos.length, abas });
+    } catch {
+      /* diagnóstico nunca derruba o encerramento */
+    }
+  }
   return alvos.length;
+}
+
+/** Cancela um encerramento agendado: a pessoa voltou antes de a carência acabar. */
+export function cancelarEncerramentoPresenca(room, userId) {
+  const timer = room.presencaTimers?.get(userId);
+  if (!timer) return false;
+  clearTimeout(timer);
+  room.presencaTimers.delete(userId);
+  return true;
+}
+
+/**
+ * Agenda o encerramento da presença de quem ficou sem nenhum socket de
+ * espectador, dando tempo para a reconexão automática da atividade.
+ *
+ * Se a pessoa reconectar (attachViewer) o agendamento é cancelado e a
+ * transmissão segue intacta. Se não, passado `graceMs`, vale o mesmo
+ * encerramento imediato de antes. Só agenda quando há algo a encerrar.
+ *
+ * Expirada a carência com a aba de captura ainda conectada, a transmissão
+ * fica no ar (ver `capturaSegura`) e a aba é avisada; quem passa a vigiar é a
+ * varredura de `derrubarAbandonadas`.
+ *
+ * @returns {boolean} true se algo foi agendado
+ */
+export function agendarEncerramentoPresenca(
+  room,
+  userId,
+  motivo,
+  graceMs = VIEWER_GRACE_MS,
+  aoEncerrar = null,
+  aoManter = null,
+) {
+  const temAlgo =
+    broadcastersOf(room, userId).length > 0 ||
+    [...room.controles].some((ws) => ws.__controlOf === userId);
+  if (!temAlgo) return false;
+
+  if (graceMs <= 0) {
+    const paradas = encerrarPresenca(room, userId, motivo, 'sem-carencia');
+    aoEncerrar?.(paradas);
+    return true;
+  }
+
+  room.presencaTimers ??= new Map();
+  cancelarEncerramentoPresenca(room, userId);
+  const timer = setTimeout(() => {
+    room.presencaTimers.delete(userId);
+    // A sala pode ter fechado, ou a pessoa voltado por outro caminho.
+    if (rooms.get(room.id) !== room || temViewer(room, userId)) return;
+    if (capturaSegura(room, userId)) {
+      room.semAtividade ??= new Set();
+      room.semAtividade.add(userId);
+      avisarCaptura(room, userId, 'atividade-fechada');
+      aoManter?.(broadcastersOf(room, userId).length);
+      return;
+    }
+    const paradas = encerrarPresenca(room, userId, motivo, 'carencia-expirou');
+    aoEncerrar?.(paradas);
+  }, graceMs);
+  timer.unref?.();
+  room.presencaTimers.set(userId, timer);
+  return true;
 }
 
 function derrubarAbandonadas(room, now) {
   for (const entry of room.broadcasters.values()) {
-    if (temViewer(room, entry.info.id)) {
+    if (temViewer(room, entry.info.id) || capturaSegura(room, entry.info.id)) {
       entry.semDonoDesde = null;
       continue;
     }
@@ -444,7 +563,12 @@ function derrubarAbandonadas(room, now) {
     if (now - entry.semDonoDesde <= SEM_PRESENCA_MS) continue;
 
     logDev(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
-    encerrarPresenca(room, entry.info.id, 'Você saiu da atividade, então a transmissão parou.');
+    encerrarPresenca(
+      room,
+      entry.info.id,
+      'Você saiu da atividade, então a transmissão parou.',
+      'sem-presenca',
+    );
   }
 }
 
@@ -944,6 +1068,11 @@ export function attachViewer(room, ws, info) {
   ws.__mediaBytesOut = ws.__mediaBytesOut ?? 0;
   room.viewers.add(ws);
   room.emptySince = null;
+  // Voltou dentro da carência: a transmissão e a aba de captura seguem de pé.
+  if (info?.id) {
+    cancelarEncerramentoPresenca(room, info.id);
+    if (room.semAtividade?.delete(info.id)) avisarCaptura(room, info.id, 'atividade-voltou');
+  }
 
   sendJson(ws, roomState(room));
 

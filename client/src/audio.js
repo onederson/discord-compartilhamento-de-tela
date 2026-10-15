@@ -24,6 +24,9 @@ const COLCHAO = 0.08;
 // a tela e continuar empilhando só piora — melhor um corte e voltar ao vivo.
 const ATRASO_MAXIMO = COLCHAO * 4;
 
+// Pacotes de 20 ms: 50 é um segundo inteiro preso no decoder.
+const MAX_FILA_DECODER = 50;
+
 export function createAudio({ onError, volume = 1 } = {}) {
   let ctx = null;
   let decoder = null;
@@ -74,6 +77,10 @@ export function createAudio({ onError, volume = 1 } = {}) {
   /** Pacote empacotado: [1B slot][1B tipo][8B timestamp][8B envio][payload] */
   function push(buffer) {
     if (!decoder || decoder.state !== 'configured') return;
+    // Mesmo motivo do teto no player de vídeo: decoder parado não pode virar
+    // fila sem fim. Opus se decodifica pacote a pacote, então descartar só
+    // custa um estalo.
+    if (decoder.decodeQueueSize > MAX_FILA_DECODER) return;
 
     const view = new DataView(buffer);
     try {
