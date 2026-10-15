@@ -194,6 +194,27 @@ export function toControls(room, userId, obj) {
   return entregues;
 }
 
+/**
+ * A transmissão de quem está sem a atividade pode seguir no ar.
+ *
+ * O Discord de algumas máquinas descarrega o iframe da atividade quando a
+ * pessoa foca um jogo, sem ela ter saído de nada. A aba de captura continua
+ * viva, com o aviso de compartilhamento do próprio navegador na frente dela,
+ * então derrubar a tela aqui punia quem assiste por uma decisão do Discord.
+ *
+ * Só vale enquanto houver alguém na sala: sem plateia, segurar a tela no ar
+ * seria o vazamento que `encerrarPresenca` existe para evitar.
+ */
+function capturaSegura(room, userId) {
+  return room.viewers.size > 0 && countControls(room, userId) > 0;
+}
+
+function avisarCaptura(room, userId, type) {
+  for (const ws of room.controles) {
+    if (ws.__controlOf === userId) sendJson(ws, { type });
+  }
+}
+
 /** Conta quantas abas de controle uma pessoa tem abertas. */
 export function countControls(room, userId) {
   let count = 0;
@@ -434,6 +455,7 @@ export function encerrarPresenca(
   origem = 'direto',
 ) {
   cancelarEncerramentoPresenca(room, userId);
+  room.semAtividade?.delete(userId);
   const alvos = broadcastersOf(room, userId);
   for (const entry of alvos) {
     if (entry.graceTimer) {
@@ -482,6 +504,10 @@ export function cancelarEncerramentoPresenca(room, userId) {
  * transmissão segue intacta. Se não, passado `graceMs`, vale o mesmo
  * encerramento imediato de antes. Só agenda quando há algo a encerrar.
  *
+ * Expirada a carência com a aba de captura ainda conectada, a transmissão
+ * fica no ar (ver `capturaSegura`) e a aba é avisada; quem passa a vigiar é a
+ * varredura de `derrubarAbandonadas`.
+ *
  * @returns {boolean} true se algo foi agendado
  */
 export function agendarEncerramentoPresenca(
@@ -490,6 +516,7 @@ export function agendarEncerramentoPresenca(
   motivo,
   graceMs = VIEWER_GRACE_MS,
   aoEncerrar = null,
+  aoManter = null,
 ) {
   const temAlgo =
     broadcastersOf(room, userId).length > 0 ||
@@ -508,6 +535,13 @@ export function agendarEncerramentoPresenca(
     room.presencaTimers.delete(userId);
     // A sala pode ter fechado, ou a pessoa voltado por outro caminho.
     if (rooms.get(room.id) !== room || temViewer(room, userId)) return;
+    if (capturaSegura(room, userId)) {
+      room.semAtividade ??= new Set();
+      room.semAtividade.add(userId);
+      avisarCaptura(room, userId, 'atividade-fechada');
+      aoManter?.(broadcastersOf(room, userId).length);
+      return;
+    }
     const paradas = encerrarPresenca(room, userId, motivo, 'carencia-expirou');
     aoEncerrar?.(paradas);
   }, graceMs);
@@ -518,7 +552,7 @@ export function agendarEncerramentoPresenca(
 
 function derrubarAbandonadas(room, now) {
   for (const entry of room.broadcasters.values()) {
-    if (temViewer(room, entry.info.id)) {
+    if (temViewer(room, entry.info.id) || capturaSegura(room, entry.info.id)) {
       entry.semDonoDesde = null;
       continue;
     }
@@ -1035,7 +1069,10 @@ export function attachViewer(room, ws, info) {
   room.viewers.add(ws);
   room.emptySince = null;
   // Voltou dentro da carência: a transmissão e a aba de captura seguem de pé.
-  if (info?.id) cancelarEncerramentoPresenca(room, info.id);
+  if (info?.id) {
+    cancelarEncerramentoPresenca(room, info.id);
+    if (room.semAtividade?.delete(info.id)) avisarCaptura(room, info.id, 'atividade-voltou');
+  }
 
   sendJson(ws, roomState(room));
 

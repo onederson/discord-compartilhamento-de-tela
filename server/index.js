@@ -1615,6 +1615,18 @@ function handleViewer(ws, room, auth) {
             );
           }
         },
+        (mantidas) => {
+          diagnostico.log('presence.kept', {
+            reason: 'captura-viva',
+            sala: room.id,
+            pessoa: pessoa(auth.uid),
+            graceMs: VIEWER_GRACE_MS,
+            streams: mantidas,
+          });
+          logDev(
+            `[room ${room.id}] ${auth.name} sem a atividade, mas com a aba de captura aberta — transmissão mantida`,
+          );
+        },
       );
       if (agendou) {
         logDev(

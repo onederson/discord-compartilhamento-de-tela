@@ -172,6 +172,67 @@ describe('carência de presença do espectador', () => {
 
     expect(room.presencaTimers.size).toBe(0);
   });
+
+  describe('com a aba de captura viva e alguém assistindo', () => {
+    function comPlateia() {
+      const c = cenario();
+      const plateia = socket();
+      R.attachViewer(c.room, plateia, { id: 'espectador', name: 'Quem assiste' });
+      R.detachViewer(c.room, c.viewer);
+      return { ...c, plateia };
+    }
+
+    it('mantém a transmissão no ar e avisa a aba', () => {
+      const { room, captura, aba } = comPlateia();
+      const aoEncerrar = vi.fn();
+      const aoManter = vi.fn();
+      R.agendarEncerramentoPresenca(room, quem.id, 'saiu', undefined, aoEncerrar, aoManter);
+
+      // Passa da carência e da varredura de quem ficou sem presença.
+      vi.advanceTimersByTime(R.VIEWER_GRACE_MS + SEM_PRESENCA + SWEEP * 2);
+
+      expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(false);
+      expect(aba.recebidas.some((m) => m.type === 'close-request')).toBe(false);
+      expect(aba.recebidas.some((m) => m.type === 'atividade-fechada')).toBe(true);
+      expect(room.broadcasters.size).toBe(1);
+      expect(aoManter).toHaveBeenCalledWith(1);
+      expect(aoEncerrar).not.toHaveBeenCalled();
+    });
+
+    it('avisa a aba quando a pessoa reabre a atividade', () => {
+      const { room, aba } = comPlateia();
+      R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+      vi.advanceTimersByTime(R.VIEWER_GRACE_MS);
+
+      R.attachViewer(room, socket(), quem);
+
+      expect(aba.recebidas.at(-1)?.type).toBe('atividade-voltou');
+    });
+
+    it('encerra quando a plateia vai embora', () => {
+      const { room, captura, plateia } = comPlateia();
+      R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+      vi.advanceTimersByTime(R.VIEWER_GRACE_MS);
+
+      R.detachViewer(room, plateia);
+      vi.advanceTimersByTime(SEM_PRESENCA + SWEEP * 2);
+
+      expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(true);
+      expect(room.broadcasters.size).toBe(0);
+    });
+
+    it('encerra quando a aba de captura cai', () => {
+      const { room, captura, aba } = comPlateia();
+      R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+      vi.advanceTimersByTime(R.VIEWER_GRACE_MS);
+
+      R.detachControl(room, aba);
+      vi.advanceTimersByTime(SEM_PRESENCA + SWEEP * 2);
+
+      expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(true);
+      expect(room.broadcasters.size).toBe(0);
+    });
+  });
 });
 
 describe('baldes de tráfego', () => {
