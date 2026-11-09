@@ -134,6 +134,17 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 const available = new Map(); // slot -> { userId, config }
 const watching = new Map(); // slots que eu pedi para assistir
 
+// Quem eu assistia e a transmissão sumiu sem eu desistir (queda, troca de aba
+// de captura). Quando a mesma pessoa volta — quase sempre em outro slot — a
+// intenção de assistir continua valendo por um tempo, sem novo clique.
+const RETOMAR_JANELA_MS = 120_000;
+const retomarDepois = new Map(); // `${userId}|${fonte}` -> expiraEm
+
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
+
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
 const abas = new Set();
@@ -146,6 +157,7 @@ let ws = null;
 let participants = [];
 let reconnectDelay = 1000;
 let reconnectTimer = null;
+let vigiaSilencio = null;
 let connectionTimer = null;
 let connectionState = 'connecting';
 let lagTimer = null;
@@ -366,10 +378,32 @@ function entradasDoGrid() {
   return saida;
 }
 
-function watchSlot(slot) {
+const chaveRetomada = (userId, fonte) => `${userId}|${fonte ?? 'tela'}`;
+
+// Chamado antes de apagar o slot de `watching` por motivo alheio à vontade da
+// pessoa (stream-stop, sumiu do state, slot reaproveitado).
+function lembrarParaRetomar(slot) {
+  const antigo = watching.get(slot);
+  if (!antigo) return;
+  retomarDepois.set(chaveRetomada(antigo.userId, antigo.fonte), Date.now() + RETOMAR_JANELA_MS);
+}
+
+function retomarSeLembrado(slot) {
   const info = available.get(slot);
   if (!info) return;
-  activeSlot = slot;
+  const chave = chaveRetomada(info.userId, info.fonte);
+  const expiraEm = retomarDepois.get(chave);
+  if (expiraEm === undefined) return;
+  retomarDepois.delete(chave);
+  if (Date.now() > expiraEm || watching.has(slot)) return;
+  // Quem já está no palco com outra transmissão viva não perde o foco.
+  watchSlot(slot, { focar: activeSlot === null || !available.has(activeSlot) });
+}
+
+function watchSlot(slot, { focar = true } = {}) {
+  const info = available.get(slot);
+  if (!info) return;
+  if (focar) activeSlot = slot;
   watching.set(slot, { userId: info.userId, fonte: info.fonte ?? 'tela' });
   sendToRoom(JSON.stringify({ type: 'watch', slot }));
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
@@ -414,6 +448,9 @@ function recuperarTelasVisiveis() {
 }
 
 function unwatchSlot(slot) {
+  // Desistir de propósito cancela qualquer retomada automática.
+  const antigo = watching.get(slot);
+  if (antigo) retomarDepois.delete(chaveRetomada(antigo.userId, antigo.fonte));
   watching.delete(slot);
   sendToRoom(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
@@ -1586,6 +1623,8 @@ let lobbyTimer = null;
 function limparSala() {
   clearTimeout(reconnectTimer);
   clearTimeout(connectionTimer);
+  clearInterval(vigiaSilencio);
+  vigiaSilencio = null;
   connectionTimer = null;
   reconnectTimer = null;
   reconnectDelay = 1000;
@@ -1609,6 +1648,7 @@ function limparSala() {
   closeAllStreams();
   available.clear();
   watching.clear();
+  retomarDepois.clear();
   participants = [];
   lastRoomState = null;
   activeSlot = null;
@@ -2035,6 +2075,7 @@ function connect() {
   }, 10_000);
 
   let abriu = false;
+  let ultimoRecebido = Date.now();
 
   socket.addEventListener('open', () => {
     if (ws !== socket) return;
@@ -2059,6 +2100,7 @@ function connect() {
 
   socket.addEventListener('message', (e) => {
     if (ws !== socket) return;
+    ultimoRecebido = Date.now();
     // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
@@ -2080,7 +2122,30 @@ function connect() {
     }
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
-    if (msg.type === 'state') {
+    if (msg.type === 'hb') {
+      // Só vigia quem já provou que o servidor manda hb; servidor antigo
+      // calaria a conexão à toa.
+      if (!vigiaSilencio) {
+        vigiaSilencio = setInterval(() => {
+          if (ws !== socket) {
+            clearInterval(vigiaSilencio);
+            vigiaSilencio = null;
+            return;
+          }
+          const ms = Date.now() - ultimoRecebido;
+          if (ms < SILENCIO_MAX_MS) return;
+          caixaPreta.registrar('ws.silencio', { ms });
+          // Num socket meio-aberto o close do navegador pode levar minutos:
+          // a queda é tratada já, e o guard `ws !== socket` ignora o close real.
+          aoFecharSocket(socket, { code: 4000, reason: 'silencio' });
+          try {
+            socket.close();
+          } catch {
+            /* já fechado */
+          }
+        }, SILENCIO_VERIFICA_MS);
+      }
+    } else if (msg.type === 'state') {
       cancelarGracePeriodViewer();
       participants = msg.participants ?? [];
       abas.clear();
@@ -2097,13 +2162,17 @@ function connect() {
 
       // Limpa o que sumiu sem stream-stop (queda abrupta, por exemplo).
       const live = new Set((msg.streams ?? []).map((s) => s.slot));
+      const novas = new Map(); // slot -> info criada agora (entrada nova)
       for (const s of msg.streams ?? []) {
         const anterior = available.get(s.slot);
         const info =
           anterior?.userId === s.userId && anterior?.fonte === (s.fonte ?? 'tela')
             ? anterior
             : { userId: s.userId, config: null };
-        if (info !== anterior) closeStream(s.slot);
+        if (info !== anterior) {
+          closeStream(s.slot);
+          novas.set(s.slot, info);
+        }
         info.watchers = s.watchers ?? [];
         // Servidor antigo não manda fonte; tela é o que sempre houve.
         info.fonte = s.fonte ?? 'tela';
@@ -2112,10 +2181,14 @@ function connect() {
       for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
       for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
       const retomaveis = new Set(recoverableSlots(watching, available));
-      for (const slot of watching.keys()) {
+      for (const slot of [...watching.keys()]) {
         if (retomaveis.has(slot)) continue;
+        lembrarParaRetomar(slot);
         watching.delete(slot);
         closeStream(slot);
+      }
+      for (const s of msg.streams ?? []) {
+        if (novas.has(s.slot)) retomarSeLembrado(s.slot);
       }
       // O socket pode cair enquanto o celular suspende a Activity. A intenção
       // de assistir sobrevive à conexão; o servidor novo precisa recebê-la de
@@ -2135,8 +2208,10 @@ function connect() {
         mesmaFonte ? anterior : { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null },
       );
       if (!mesmaFonte) {
+        lembrarParaRetomar(msg.slot);
         watching.delete(msg.slot);
         closeStream(msg.slot);
+        retomarSeLembrado(msg.slot);
       }
       renderGrid();
     } else if (msg.type === 'config') {
@@ -2159,6 +2234,7 @@ function connect() {
       if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
     } else if (msg.type === 'stream-stop') {
       available.delete(msg.slot);
+      lembrarParaRetomar(msg.slot);
       watching.delete(msg.slot);
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
@@ -2178,8 +2254,12 @@ function connect() {
     }
   });
 
-  socket.addEventListener('close', async (e) => {
+  socket.addEventListener('close', (e) => aoFecharSocket(socket, e));
+
+  async function aoFecharSocket(socket, e) {
     if (ws !== socket) return;
+    clearInterval(vigiaSilencio);
+    vigiaSilencio = null;
     caixaPreta.registrar('ws.close', { code: e.code, abriu, visivel: document.visibilityState });
     clearTimeout(connectionTimer);
     connectionTimer = null;
@@ -2232,12 +2312,15 @@ function connect() {
       );
     }
     // Backoff — evita martelar o servidor se ele estiver fora do ar.
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (roomTokens === sala) connect();
-    }, reconnectDelay);
+    reconnectTimer = setTimeout(
+      () => {
+        reconnectTimer = null;
+        if (roomTokens === sala) connect();
+      },
+      reconnectDelay * (0.8 + Math.random() * 0.4),
+    ); // jitter: evita reconexão em massa no mesmo instante
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
-  });
+  }
 
   socket.addEventListener('error', () => socket.close());
 }

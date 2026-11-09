@@ -7,6 +7,12 @@
  * sem receber nada e sem `close` para disparar a reconexão.
  */
 import WebSocket from 'ws';
+// As esperas vêm das próprias constantes do servidor: números fixos aqui
+// envelheciam calados a cada ajuste de carência e o smoke falhava sem motivo.
+import { EMPTY_GRACE_MS, VIEWER_GRACE_MS } from '../server/rooms.js';
+
+// A varredura roda a cada 4s: duas voltas mais uma folga cobrem o atraso dela.
+const FOLGA_VARREDURA_MS = 10_000;
 
 const BASE = 'http://localhost:3001';
 const WSB = 'ws://localhost:3001';
@@ -42,9 +48,9 @@ await new Promise((r) => ctrl.on('open', r));
 check('a aba de controle conecta', ctrl.readyState === WebSocket.OPEN);
 
 // Ninguém assiste e ninguém transmite: a sala está vazia desde que nasceu.
-// A carência é de 12s e a varredura roda a cada 4s, então 20s cobre com folga.
-console.log('esperando a varredura fechar a sala vazia (20s)…');
-await new Promise((r) => setTimeout(r, 20_000));
+const esperaSalaVazia = EMPTY_GRACE_MS + FOLGA_VARREDURA_MS;
+console.log(`esperando a varredura fechar a sala vazia (${esperaSalaVazia / 1000}s)…`);
+await new Promise((r) => setTimeout(r, esperaSalaVazia));
 
 check(
   'a aba foi avisada de que a sala fechou',
@@ -123,8 +129,9 @@ check(
 
   // Sai da atividade. So a aba de captura fica de pe.
   viewer.close();
-  console.log('esperando a carencia de presenca (22s)...');
-  await new Promise((r) => setTimeout(r, 22000));
+  const esperaPresenca = VIEWER_GRACE_MS + FOLGA_VARREDURA_MS;
+  console.log(`esperando a carencia de presenca (${esperaPresenca / 1000}s)...`);
+  await new Promise((r) => setTimeout(r, esperaPresenca));
 
   const pedido = doTx.find((m) => m.type === 'stop-request');
   check(

@@ -683,6 +683,95 @@ describe('conexão', () => {
     expect(b.isRunning()).toBe(false);
   });
 
+  describe('vigia de silêncio', () => {
+    async function noArComRelogio(extra = {}) {
+      vi.useFakeTimers();
+      prepararCaptura(telaSimples());
+      const b = createBroadcaster(opcoes(extra));
+      const promessa = b.start();
+      await vi.advanceTimersByTimeAsync(0);
+      sockets.at(-1).abrir();
+      await promessa;
+      return { b, ws: sockets.at(-1) };
+    }
+
+    afterEach(() => vi.useRealTimers());
+
+    it('depois de um hb, 25s de silêncio disparam exatamente uma reconexão', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.receber({ type: 'hb' });
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(ws.fechado).toBe(true);
+      // O close tardio do socket abandonado não pode abrir uma segunda reconexão.
+      ws.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sockets).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sockets).toHaveLength(2);
+      b.stop();
+    });
+
+    it('qualquer mensagem, inclusive binária, adia o silêncio', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.receber({ type: 'hb' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      ws.disparar('message', { data: new ArrayBuffer(4) });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(ws.fechado).toBe(false);
+      b.stop();
+    });
+
+    it('sem hb nada acontece, por mais longo que seja o silêncio', async () => {
+      const { b, ws } = await noArComRelogio();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(ws.fechado).toBe(false);
+      expect(sockets).toHaveLength(1);
+      expect(b.isRunning()).toBe(true);
+      b.stop();
+    });
+
+    it('também vigia o socket aberto pela reconexão', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      const novo = sockets.at(-1);
+      novo.abrir();
+      await vi.advanceTimersByTimeAsync(0);
+      novo.receber({ type: 'hb' });
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(novo.fechado).toBe(true);
+      novo.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sockets).toHaveLength(3);
+      b.stop();
+    });
+
+    it('o atraso do backoff nunca passa de 5s', async () => {
+      const onAviso = vi.fn();
+      const { b, ws } = await noArComRelogio({ onAviso });
+      ws.disparar('close');
+      for (let i = 0; i < 8; i++) {
+        await vi.advanceTimersByTimeAsync(5000);
+        sockets.at(-1).disparar('error');
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      const atrasos = onAviso.mock.calls
+        .map(([m]) => /em (\d+)s/.exec(m)?.[1])
+        .filter(Boolean)
+        .map(Number);
+      expect(atrasos.slice(0, 5)).toEqual([1, 2, 4, 5, 5]);
+      expect(Math.max(...atrasos)).toBe(5);
+      b.stop();
+    });
+  });
+
   it('ignora o que chega no socket e não é texto', async () => {
     const { b, ws } = await noAr();
 

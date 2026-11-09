@@ -19,7 +19,7 @@ import {
   fonteIndisponivel,
   opcoesTela,
   pedirDisplayMedia,
-} from '/shared/broadcaster.js?v=13';
+} from '/shared/broadcaster.js?v=14';
 
 const $ = (id) => document.getElementById(id);
 
@@ -313,14 +313,44 @@ let controle = null;
 let religar = null;
 let avisoAtividade = false;
 
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
+let vigiaControle = null;
+
+// Em sala de call a sala é recriada com o MESMO id quando a atividade volta,
+// então "sala fechada" ali é uma pausa, não um fim: a aba espera e tenta de novo.
+const CALL_RELIGAR_MS = 5_000;
+const CALL_JANELA_MS = 10 * 60_000;
+let salaFechadaDesde = null; // quando começou a espera pela sala de call
+
+/** Sala de call? O id vai no token: base64url(JSON).assinatura. */
+function ehSalaDeCall() {
+  const sala = readTokenPayload()?.room;
+  return typeof sala === 'string' && sala.startsWith('call-');
+}
+
+function desistirDaSala() {
+  clearTimeout(religar);
+  religar = 'morto';
+  salaFechadaDesde = null;
+  mostrarControle('Sala encerrada', 'offline');
+  $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
+  $('pageStatus').className = 'status aviso';
+}
+
 function ligarControle() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  controle = new WebSocket(
+  const socket = new WebSocket(
     `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`,
   );
+  controle = socket;
+  let ultimoRecebido = Date.now();
 
-  controle.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
-  controle.addEventListener('message', (e) => {
+  socket.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
+  socket.addEventListener('message', (e) => {
+    ultimoRecebido = Date.now();
     if (typeof e.data !== 'string') return;
 
     let msg;
@@ -330,6 +360,38 @@ function ligarControle() {
       return;
     }
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
+
+    if (msg.type === 'hb') {
+      // Só vigia depois do primeiro hb: servidor antigo nunca manda, e vigiar
+      // o silêncio dele derrubaria uma conexão saudável.
+      if (!vigiaControle) {
+        vigiaControle = setInterval(() => {
+          if (controle !== socket) {
+            clearInterval(vigiaControle);
+            vigiaControle = null;
+            return;
+          }
+          if (Date.now() - ultimoRecebido < SILENCIO_MAX_MS) return;
+          // O close de um socket meio-aberto pode levar minutos: segue já
+          // para a reconexão, e o guard de aoFecharControle ignora o close real.
+          aoFecharControle(socket);
+          try {
+            socket.close();
+          } catch {
+            /* já fechado */
+          }
+        }, SILENCIO_VERIFICA_MS);
+      }
+      return;
+    }
+
+    // Qualquer coisa além do room-gone prova que a sala voltou.
+    if (salaFechadaDesde !== null && msg.type !== 'room-gone') {
+      salaFechadaDesde = null;
+      mostrarControle('Conectado à sala', 'connected');
+      $('pageStatus').textContent = '';
+      $('pageStatus').className = 'status';
+    }
 
     if (msg.type === 'start-request') {
       window.name = 'discord-screen-captura';
@@ -410,25 +472,49 @@ function ligarControle() {
     } else if (msg.type === 'close-request') {
       fecharAba(msg.motivo);
     } else if (msg.type === 'room-gone') {
+      if (ehSalaDeCall()) {
+        salaFechadaDesde ??= Date.now();
+        if (Date.now() - salaFechadaDesde < CALL_JANELA_MS) {
+          mostrarControle('Sala fechada — aguardando a atividade', 'reconnecting');
+          $('pageStatus').textContent =
+            'A sala da call fechou. Esta aba tenta voltar sozinha quando a atividade reabrir.';
+          $('pageStatus').className = 'status aviso';
+          clearTimeout(religar);
+          religar = setTimeout(ligarControle, CALL_RELIGAR_MS);
+          return;
+        }
+      }
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.
-      clearTimeout(religar);
-      religar = 'morto';
-      mostrarControle('Sala encerrada', 'offline');
-      $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
-      $('pageStatus').className = 'status aviso';
+      desistirDaSala();
     }
   });
 
   // Sem reconectar, uma queda de rede deixa a aba aberta e surda, sem nada na
   // tela dizendo que ela parou de obedecer à atividade.
-  controle.addEventListener('close', () => {
-    controle = null;
-    if (religar === 'morto') return;
-    mostrarControle('Reconectando à sala', 'reconnecting');
+  socket.addEventListener('close', () => aoFecharControle(socket));
+}
+
+function aoFecharControle(socket) {
+  if (controle !== socket) return;
+  clearInterval(vigiaControle);
+  vigiaControle = null;
+  controle = null;
+  if (religar === 'morto') return;
+  if (salaFechadaDesde !== null) {
+    // O servidor costuma fechar o socket logo após o room-gone: a espera de
+    // call precisa continuar no ritmo dela, e acabar no prazo.
+    if (Date.now() - salaFechadaDesde >= CALL_JANELA_MS) {
+      desistirDaSala();
+      return;
+    }
     clearTimeout(religar);
-    religar = setTimeout(ligarControle, 3000);
-  });
+    religar = setTimeout(ligarControle, CALL_RELIGAR_MS);
+    return;
+  }
+  mostrarControle('Reconectando à sala', 'reconnecting');
+  clearTimeout(religar);
+  religar = setTimeout(ligarControle, 3000);
 }
 
 // ------------------------------------------------------------------ painel

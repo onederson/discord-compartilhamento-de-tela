@@ -46,8 +46,16 @@ const KEYFRAME_EVERY_MS = 3000;
 // Reconexão automática do broadcaster: o viewer já reconectava, mas a aba de
 // captura não — qualquer oscilação de rede matava a transmissão de vez, e a
 // pessoa tinha que escolher a tela de novo.
-const MAX_RECONNECT_ATTEMPTS = 30;
+// Teto de 5s e 60 tentativas: insiste os mesmos ~5 min, mas volta ao ar mais
+// cedo quando a queda é curta.
+const MAX_RECONNECT_ATTEMPTS = 60;
 const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 5000;
+
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
 
 // Keepalive: mantém a conexão viva através de proxies e load balancers que
 // matam sockets ociosos. O servidor ignora o pacote; a utilidade é manter
@@ -1298,11 +1306,16 @@ export function createBroadcaster({
 
   // ---------------------------------------------------------------- websocket
 
+  let vigiaTimer = null;
+  let ultimoRecebido = 0;
+  const abandonados = new WeakSet(); // sockets que o vigia já deu por mortos
+
   function connect() {
     return new Promise((resolve, reject) => {
       mySlot = null;
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
+      const socket = ws;
       let abriu = false;
       let resolvido = false;
 
@@ -1337,9 +1350,14 @@ export function createBroadcaster({
       });
 
       ws.addEventListener('message', (e) => {
+        ultimoRecebido = Date.now();
         if (typeof e.data !== 'string') return;
         const msg = JSON.parse(e.data);
 
+        if (msg.type === 'hb') {
+          armarVigia(socket);
+          return;
+        }
         if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
           mySlot = msg.slot;
           pronto();
@@ -1381,6 +1399,8 @@ export function createBroadcaster({
       });
 
       ws.addEventListener('close', (e) => {
+        // O vigia já cuidou da queda e abriu outra reconexão.
+        if (abandonados.has(socket)) return;
         clearTimeout(timeout);
         stopKeepalive();
         if (e?.code === 4001) {
@@ -1407,7 +1427,10 @@ export function createBroadcaster({
     }
 
     reconnectAttempts++;
-    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1), 10_000);
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1),
+      RECONNECT_MAX_MS,
+    );
     onAviso?.(
       `Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
     );
@@ -1421,6 +1444,7 @@ export function createBroadcaster({
           : `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}substituir=1`;
         ws = new WebSocket(reconnectUrl);
         ws.binaryType = 'arraybuffer';
+        const socket = ws;
 
         await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
@@ -1433,8 +1457,13 @@ export function createBroadcaster({
           });
 
           ws.addEventListener('message', (e) => {
+            ultimoRecebido = Date.now();
             if (typeof e.data !== 'string') return;
             const msg = JSON.parse(e.data);
+            if (msg.type === 'hb') {
+              armarVigia(socket);
+              return;
+            }
             if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
               mySlot = msg.slot;
               clearTimeout(timeout);
@@ -1471,6 +1500,7 @@ export function createBroadcaster({
 
           ws.addEventListener('error', () => reject(new Error('Falha na reconexão.')));
           ws.addEventListener('close', (e) => {
+            if (abandonados.has(socket)) return;
             stopKeepalive();
             if (e?.code === 4001) {
               stop('Transmissão substituída pela nova aba.');
@@ -1505,6 +1535,7 @@ export function createBroadcaster({
 
         // Reconecta o handler de close para futuras quedas.
         ws.addEventListener('close', () => {
+          if (abandonados.has(socket)) return;
           stopKeepalive();
           if (running) attemptReconnect();
         });
@@ -1529,6 +1560,36 @@ export function createBroadcaster({
   function stopKeepalive() {
     clearInterval(keepaliveTimer);
     keepaliveTimer = null;
+    // O vigia vive e morre com a conexão, como o keepalive.
+    clearInterval(vigiaTimer);
+    vigiaTimer = null;
+  }
+
+  /**
+   * Só arma depois do primeiro hb: servidor antigo nunca manda hb, e vigiar
+   * esse silêncio derrubaria uma conexão saudável. Silêncio é não receber
+   * NENHUMA mensagem (texto ou binária) por SILENCIO_MAX_MS.
+   */
+  function armarVigia(socket) {
+    if (vigiaTimer) return;
+    vigiaTimer = setInterval(() => {
+      if (ws !== socket || abandonados.has(socket)) {
+        clearInterval(vigiaTimer);
+        vigiaTimer = null;
+        return;
+      }
+      if (Date.now() - ultimoRecebido < SILENCIO_MAX_MS) return;
+      // Num socket meio-aberto o close do navegador pode levar minutos. O
+      // socket é abandonado antes, para o close tardio não reconectar de novo.
+      abandonados.add(socket);
+      stopKeepalive();
+      attemptReconnect();
+      try {
+        socket.close();
+      } catch {
+        /* já fechado */
+      }
+    }, SILENCIO_VERIFICA_MS);
   }
 
   // -------------------------------------------------------------------- parar

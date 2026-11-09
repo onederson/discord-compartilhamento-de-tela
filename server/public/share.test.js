@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const capture = vi.hoisted(() => ({ instances: [] }));
-vi.mock('/shared/broadcaster.js?v=13', () => ({
+vi.mock('/shared/broadcaster.js?v=14', () => ({
   supportError: () => null,
   fonteIndisponivel: () => null,
   opcoesTela: () => ({ video: true }),
@@ -47,12 +47,11 @@ class SocketFalso {
   }
 }
 
-beforeEach(async () => {
-  vi.useFakeTimers();
+async function carregar(room = 'sala') {
   vi.resetModules();
   capture.instances.length = 0;
   sockets = [];
-  const token = `${Buffer.from(JSON.stringify({ uid: 'teste', role: 'broadcaster', room: 'sala' })).toString('base64url')}.assinatura`;
+  const token = `${Buffer.from(JSON.stringify({ uid: 'teste', role: 'broadcaster', room })).toString('base64url')}.assinatura`;
   dom = new JSDOM(html, {
     url: `http://localhost/share.html?t=${token}&fps=60&q=5000000`,
     runScripts: 'dangerously',
@@ -73,6 +72,11 @@ beforeEach(async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
   vi.spyOn(dom.window.HTMLMediaElement.prototype, 'play').mockResolvedValue();
   await import('./share.js');
+}
+
+beforeEach(async () => {
+  vi.useFakeTimers();
+  await carregar();
 });
 
 afterEach(() => {
@@ -142,5 +146,92 @@ describe('página de captura', () => {
     expect(broadcaster.stop).not.toHaveBeenCalled();
     document.getElementById('tela-stop').click();
     expect(document.getElementById('header-status-text').textContent).toBe('Offline');
+  });
+});
+
+describe('conexão de controle', () => {
+  const hb = JSON.stringify({ type: 'hb' });
+  const salaGone = { data: JSON.stringify({ type: 'room-gone' }) };
+
+  it('sem hb o silêncio não derruba o controle', async () => {
+    sockets[0].dispatch('open');
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(sockets).toHaveLength(1);
+    expect(sockets[0].readyState).toBe(SocketFalso.OPEN);
+  });
+
+  it('com hb, 25s de silêncio fecham o socket e religam em 3s', async () => {
+    sockets[0].dispatch('open');
+    sockets[0].dispatch('message', { data: hb });
+    await vi.advanceTimersByTimeAsync(25_000);
+
+    expect(sockets[0].readyState).toBe(3);
+    expect(document.getElementById('control-status').textContent).toBe('Reconectando à sala');
+    // O close real, tardio, não agenda uma segunda religação.
+    sockets[0].dispatch('close');
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('sala que não é de call continua morta após room-gone', async () => {
+    sockets[0].dispatch('message', salaGone);
+    sockets[0].dispatch('close');
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(sockets).toHaveLength(1);
+    expect(document.getElementById('control-status').textContent).toBe('Sala encerrada');
+  });
+
+  describe('sala de call', () => {
+    beforeEach(async () => {
+      dom.window.close();
+      await carregar('call-123');
+    });
+
+    it('espera a atividade e tenta de novo a cada 5s após room-gone', async () => {
+      sockets[0].dispatch('message', salaGone);
+      sockets[0].dispatch('close');
+
+      expect(document.getElementById('control-status').textContent).toBe(
+        'Sala fechada — aguardando a atividade',
+      );
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sockets).toHaveLength(2);
+      sockets[1].dispatch('message', salaGone);
+      sockets[1].dispatch('close');
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(sockets).toHaveLength(3);
+    });
+
+    it('volta ao normal quando a sala responde', async () => {
+      sockets[0].dispatch('message', salaGone);
+      sockets[0].dispatch('close');
+      await vi.advanceTimersByTimeAsync(5000);
+      sockets[1].dispatch('open');
+      sockets[1].dispatch('message', { data: JSON.stringify({ type: 'atividade-voltou' }) });
+
+      expect(document.getElementById('control-status').textContent).toBe('Conectado à sala');
+      expect(document.getElementById('pageStatus').textContent).toBe('');
+    });
+
+    it('desiste após 10 minutos com o comportamento antigo', async () => {
+      sockets[0].dispatch('message', salaGone);
+      sockets[0].dispatch('close');
+      // Cada tentativa recebe room-gone de novo, até o prazo vencer.
+      for (let i = 0; i < 130 && sockets.length < 200; i++) {
+        await vi.advanceTimersByTimeAsync(5000);
+        const ultimo = sockets.at(-1);
+        if (ultimo.readyState === 3) continue;
+        ultimo.dispatch('message', salaGone);
+        ultimo.dispatch('close');
+      }
+      const total = sockets.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(sockets).toHaveLength(total);
+      expect(document.getElementById('control-status').textContent).toBe('Sala encerrada');
+      expect(document.getElementById('pageStatus').textContent).toContain('A sala foi fechada');
+    });
   });
 });

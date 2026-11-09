@@ -12,7 +12,7 @@ vi.useFakeTimers();
 const R = await import('./rooms.js');
 
 const SWEEP = 4 * 1000;
-const CARENCIA = 12 * 1000;
+const CARENCIA = R.EMPTY_GRACE_MS;
 const SEM_PRESENCA = R.SEM_PRESENCA_MS;
 
 let sequencia = 0;
@@ -199,6 +199,23 @@ describe('carência de presença do espectador', () => {
       expect(aoEncerrar).not.toHaveBeenCalled();
     });
 
+    it('encerra depois do teto de privacidade, uma vez, avisando a aba e o transmissor', () => {
+      const { room, captura, aba } = comPlateia();
+      R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
+      vi.advanceTimersByTime(R.VIEWER_GRACE_MS);
+      expect(room.semAtividade.has(quem.id)).toBe(true);
+
+      vi.advanceTimersByTime(R.SEM_ATIVIDADE_MAX_MS - SWEEP);
+      expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(false);
+      expect(aba.recebidas.some((m) => m.type === 'close-request')).toBe(false);
+
+      vi.advanceTimersByTime(SWEEP * 3);
+      expect(captura.recebidas.filter((m) => m.type === 'stop-request')).toHaveLength(1);
+      expect(aba.recebidas.filter((m) => m.type === 'close-request')).toHaveLength(1);
+      expect(room.broadcasters.size).toBe(0);
+      expect(room.semAtividade.has(quem.id)).toBe(false);
+    });
+
     it('avisa a aba quando a pessoa reabre a atividade', () => {
       const { room, aba } = comPlateia();
       R.agendarEncerramentoPresenca(room, quem.id, 'saiu');
@@ -232,6 +249,26 @@ describe('carência de presença do espectador', () => {
       expect(captura.recebidas.some((m) => m.type === 'stop-request')).toBe(true);
       expect(room.broadcasters.size).toBe(0);
     });
+  });
+});
+
+describe('carência do slot do transmissor', () => {
+  it('sobrevive a 59s desconectado e expira depois de 60s', () => {
+    const room = sala();
+    const quem = { id: 'transmissor', name: 'Quem transmite' };
+    const captura = socket();
+    const entry = R.attachBroadcaster(room, captura, quem);
+    R.startStream(room, entry);
+    // Com o espectador dele presente, a varredura de abandono não interfere.
+    R.attachViewer(room, socket(), quem);
+
+    R.disconnectBroadcaster(room, captura);
+
+    vi.advanceTimersByTime(59 * 1000);
+    expect(room.broadcasters.size).toBe(1);
+
+    vi.advanceTimersByTime(1000);
+    expect(room.broadcasters.size).toBe(0);
   });
 });
 

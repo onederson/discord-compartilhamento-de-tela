@@ -62,8 +62,31 @@ const {
 const PUBLIC_ORIGIN = ORIGEM_CRUA.replace(/[/]+$/, '');
 
 const isProd = NODE_ENV === 'production';
+
+// Origem vazia cai no mesmo padrão local do destructuring acima (a variável
+// pode existir no ambiente, só que em branco).
+const ORIGEM_EFETIVA = PUBLIC_ORIGIN || 'http://localhost:3001';
+const ORIGEM_LOCAL = (() => {
+  try {
+    const host = new URL(ORIGEM_EFETIVA).hostname;
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  } catch {
+    return false;
+  }
+})();
+// Só em máquina de desenvolvimento: rodando exposto com NODE_ENV diferente de
+// production, a rota emitiria identidade para qualquer um da internet.
+const SESSION_DEV_ATIVA = !isProd && ORIGEM_LOCAL;
 const ADMIN_ID = String(DISCORD_ADMIN_ID).trim();
 const ADMIN_COOKIE = 'discord_screen_admin';
+// Intervalo do sinal de vida de aplicação (`{"type":"hb"}`). Existe porque o
+// ping de protocolo é invisível ao JavaScript do navegador: é o hb que deixa o
+// cliente detectar conexão meio-aberta e reconectar. Mesmo padrão do
+// VIEWER_GRACE_MS: no ambiente só para os testes.
+const HB_INTERVAL_MS =
+  process.env.HB_INTERVAL_MS && Number.isFinite(Number(process.env.HB_INTERVAL_MS))
+    ? Number(process.env.HB_INTERVAL_MS)
+    : 10_000;
 // Carência antes de encerrar a transmissão de quem ficou sem socket na atividade.
 // VIEWER_GRACE_MS no ambiente existe para os testes; o padrão vem de rooms.js.
 const VIEWER_GRACE_MS =
@@ -376,7 +399,7 @@ app.post('/api/session', rateLimit, async (req, res) => {
  * escolher a instância permitiria espiar as salas de qualquer canal de voz.
  */
 app.post('/api/session-dev', (req, res) => {
-  if (isProd) return res.status(404).end();
+  if (!SESSION_DEV_ATIVA) return res.status(404).end();
   const { instance_id = 'dev', name = 'Dev', call = null } = req.body ?? {};
   res.json(
     issueIdentity(instance_id, `dev-${name}`, name, null, 8 * 60 * 60, call ? { call } : {}),
@@ -741,8 +764,11 @@ app.post('/api/rooms/leave', (req, res) => {
   }
 
   if (!auth) {
+    // identityOf já respondeu 401 quando devolve null; responder de novo
+    // estourava ERR_HTTP_HEADERS_SENT.
     const me = identityOf(req, res);
-    if (me) auth = me;
+    if (!me) return;
+    auth = me;
   }
 
   if (!auth?.uid) {
@@ -1659,6 +1685,12 @@ const heartbeat = setInterval(() => {
   }
 }, 20_000);
 
+const sinalDeVida = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.readyState === ws.OPEN) ws.send('{"type":"hb"}');
+  }
+}, HB_INTERVAL_MS);
+
 wss.on('connection', (ws) => {
   ws.__missedPongs = 0;
   ws.on('pong', () => {
@@ -1676,8 +1708,12 @@ wss.on('connection', (ws) => {
 // programa vivo e a porta escutando, e quando ela fecha nao ha mais socket
 // para vigiar.
 heartbeat.unref?.();
+sinalDeVida.unref?.();
 
-wss.on('close', () => clearInterval(heartbeat));
+wss.on('close', () => {
+  clearInterval(heartbeat);
+  clearInterval(sinalDeVida);
+});
 
 // Porta ocupada e o tropeco mais comum aqui: basta um "npm start" esquecido
 // numa janela. Sem isto, o Node cospe um stack trace de vinte linhas que nao
@@ -1771,6 +1807,12 @@ server.listen(PORT, () => {
     console.error('  ERRO: o endereço público aponta para o proxy do Discord.');
     console.error('  A tela de captura precisa abrir fora do Discord, senão a');
     console.error('  captura é bloqueada. Rode: npm run tunel');
+  }
+
+  if (!isProd && !ORIGEM_LOCAL) {
+    console.warn('');
+    console.warn('  AVISO: servidor exposto em modo desenvolvimento (NODE_ENV != production).');
+    console.warn('  Use NODE_ENV=production fora da sua máquina.');
   }
 
   avisarBuildVelho();

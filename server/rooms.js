@@ -33,13 +33,20 @@ const MAX_ROOM_NAME = 40;
 
 // Sala vazia fecha, mas não no mesmo instante: recarregar a atividade
 // desconecta e reconecta, e quem estivesse sozinho perderia a sala a cada F5.
-// 12s cobre um reload com folga e some rápido o bastante para não deixar sala
-// fantasma na lista.
-const EMPTY_GRACE_MS = 12 * 1000;
+// O backoff de reconexão do espectador chega a 15s; com 12s a sala morria antes
+// de ele voltar. 30s cobre isso com folga e ainda some rápido o bastante para
+// não deixar sala fantasma na lista.
+export const EMPTY_GRACE_MS = 30 * 1000;
 // Quanto tempo a transmissão de alguém sobrevive à saída dessa pessoa da sala.
 // 60s protege contra resets e reconexões do gateway de voz do Discord sem derrubar a tela.
 export const SEM_PRESENCA_MS = 60 * 1000;
-export const BROADCASTER_GRACE_MS = 15 * 1000;
+// Carência do slot do transmissor desconectado: ele tenta reconectar com
+// backoff, e uma queda de rede de 10-15s expirava o slot com 15s, mandando
+// stream-stop aos espectadores (que precisavam clicar em Assistir de novo).
+export const BROADCASTER_GRACE_MS = 60 * 1000;
+// Teto de privacidade: a transmissão mantida por `capturaSegura` com a atividade
+// fechada não pode ficar no ar sem prazo; passado isto ela é encerrada.
+export const SEM_ATIVIDADE_MAX_MS = 10 * 60 * 1000;
 // Quanto o servidor espera, depois que o último socket de espectador de alguém
 // cai, antes de encerrar a transmissão e mandar a aba de captura se fechar.
 // Uma oscilação de rede, o reset do gateway do Discord ou o próprio Discord
@@ -48,7 +55,10 @@ export const BROADCASTER_GRACE_MS = 15 * 1000;
 // de reconexão da atividade (até 15s entre tentativas), então 15s era curto.
 // Sair de verdade continua sendo detectado, só que com esta folga; sair pelo
 // botão da atividade continua imediato.
-export const VIEWER_GRACE_MS = 30 * 1000;
+// Igual a BROADCASTER_GRACE_MS de propósito: quando a rede de quem transmite
+// cai inteira, a atividade e a aba de captura caem juntas, e uma carência menor
+// aqui encerrava a presença antes de o slot do transmissor poder ser retomado.
+export const VIEWER_GRACE_MS = BROADCASTER_GRACE_MS;
 const SWEEP_EVERY_MS = 4 * 1000;
 
 // Freio de força bruta: sem isso uma senha curta cai em segundos, porque o
@@ -536,8 +546,8 @@ export function agendarEncerramentoPresenca(
     // A sala pode ter fechado, ou a pessoa voltado por outro caminho.
     if (rooms.get(room.id) !== room || temViewer(room, userId)) return;
     if (capturaSegura(room, userId)) {
-      room.semAtividade ??= new Set();
-      room.semAtividade.add(userId);
+      room.semAtividade ??= new Map();
+      room.semAtividade.set(userId, Date.now());
       avisarCaptura(room, userId, 'atividade-fechada');
       aoManter?.(broadcastersOf(room, userId).length);
       return;
@@ -551,6 +561,18 @@ export function agendarEncerramentoPresenca(
 }
 
 function derrubarAbandonadas(room, now) {
+  // Uma vez por pessoa, mesmo com várias fontes: o teto vale para a pessoa.
+  if (room.semAtividade) {
+    for (const [userId, desde] of [...room.semAtividade]) {
+      if (now - desde <= SEM_ATIVIDADE_MAX_MS) continue;
+      encerrarPresenca(
+        room,
+        userId,
+        'A atividade ficou fechada por muito tempo, então a transmissão parou.',
+        'sem-atividade-expirou',
+      );
+    }
+  }
   for (const entry of room.broadcasters.values()) {
     if (temViewer(room, entry.info.id) || capturaSegura(room, entry.info.id)) {
       entry.semDonoDesde = null;

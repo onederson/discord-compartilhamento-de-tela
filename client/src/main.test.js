@@ -140,6 +140,8 @@ beforeEach(async () => {
     },
   );
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  // Jitter da reconexão no piso (x0,8): os atrasos ficam abaixo do nominal.
+  vi.spyOn(Math, 'random').mockReturnValue(0);
   vi.spyOn(console, 'info').mockImplementation(() => {});
   const identity = `${Buffer.from(JSON.stringify({ uid: 'guest-visitante', name: 'Visitante' })).toString('base64url')}.assinatura`;
   vi.stubGlobal(
@@ -459,5 +461,83 @@ describe('continuidade de quem assiste', () => {
     // Após expiração do grace period (total > 15s): a limpeza é executada
     await vi.advanceTimersByTimeAsync(14_000);
     expect(document.querySelector('.tile-palco canvas')).toBeNull();
+  });
+});
+
+describe('vigia de silêncio e retomada', () => {
+  it('não arma o vigia sem hb: servidor antigo nunca é derrubado por silêncio', async () => {
+    const socket = await entrar();
+    anunciar(socket);
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(socket.readyState).toBe(SocketFalso.OPEN);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('com hb, 25s sem nenhuma mensagem derrubam o socket e reconectam', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.readyState).toBe(SocketFalso.CLOSING);
+    expect(document.getElementById('connectionPill').dataset.state).toBe('reconnecting');
+
+    // O close real, tardio, não pode processar a queda duas vezes.
+    socket.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('qualquer mensagem, mesmo binária, renova o prazo do silêncio', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    socket.dispatch('message', { data: new ArrayBuffer(4) });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(socket.readyState).toBe(SocketFalso.OPEN);
+  });
+
+  async function assistirAna() {
+    const socket = await entrar();
+    anunciar(socket);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    return socket;
+  }
+
+  it('retoma sozinho quando a mesma pessoa volta em outro slot', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    socket.sent.length = 0;
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent).toContainEqual({ type: 'watch', slot: 1 });
+  });
+
+  it('não retoma depois de parar de assistir de propósito', async () => {
+    const socket = await assistirAna();
+    document.querySelector('.tile-stop').click();
+    expect(socket.sent).toContainEqual({ type: 'unwatch', slot: 0 });
+
+    socket.message({ type: 'stream-stop', slot: 0 });
+    socket.sent.length = 0;
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent.some((m) => m.type === 'watch')).toBe(false);
+  });
+
+  it('não retoma depois de 120s', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    await vi.advanceTimersByTimeAsync(121_000);
+    socket.sent.length = 0;
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent.some((m) => m.type === 'watch')).toBe(false);
   });
 });
