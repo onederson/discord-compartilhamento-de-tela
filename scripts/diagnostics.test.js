@@ -65,6 +65,23 @@ describe('diagnóstico privativo', () => {
     expect(texto).not.toContain('segredo');
   });
 
+  it('rotaciona mantendo três arquivos antigos', () => {
+    const logger = createDiagnosticLogger({ raiz: tmp() });
+    const grande = 'x'.repeat(5_000_001);
+    for (let i = 1; i <= 5; i++) {
+      fs.mkdirSync(path.dirname(logger.arquivo), { recursive: true });
+      fs.writeFileSync(logger.arquivo, `${i}${grande}`);
+      logger.log('rodada', { i });
+    }
+    const lido = (sufixo) => fs.readFileSync(`${logger.arquivo}${sufixo}`, 'utf8');
+
+    expect(lido('.1')[0]).toBe('5');
+    expect(lido('.2')[0]).toBe('4');
+    expect(lido('.3')[0]).toBe('3');
+    expect(fs.existsSync(`${logger.arquivo}.4`)).toBe(false);
+    expect(lido('')).toContain('"i":5');
+  });
+
   it('não envia sem opt-in e recusa HTTP externo', async () => {
     const fetchImpl = vi.fn();
     expect(await enviarDiagnostico({ url: '', fetchImpl })).toEqual({ status: 'desligado' });

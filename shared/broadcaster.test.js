@@ -1615,3 +1615,101 @@ describe('sem MediaStreamTrackProcessor', () => {
     b.stop();
   });
 });
+
+describe('diagnóstico do transmissor', () => {
+  const diagnosticos = (ws, evento) =>
+    ws.mensagens().filter((m) => m.type === 'diagnostic' && m.event === evento);
+
+  async function noArComRelogio(extra = {}) {
+    vi.useFakeTimers();
+    prepararCaptura(telaSimples());
+    const b = createBroadcaster(opcoes(extra));
+    const promessa = b.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets.at(-1).abrir();
+    await promessa;
+    return { b, ws: sockets.at(-1) };
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('informa o codec quando o encoder é configurado', async () => {
+    const { b, ws } = await noArComRelogio();
+
+    const [codec] = diagnosticos(ws, 'tx-codec');
+    expect(codec.dados).toMatchObject({ hardware: true, w: expect.any(Number) });
+    expect(codec.dados.codec).toMatch(/^avc1/);
+    b.stop();
+  });
+
+  it('o que nasce antes do slot espera na fila e sai quando o socket fica pronto', async () => {
+    vi.useFakeTimers();
+    prepararCaptura(telaSimples());
+    const b = createBroadcaster(opcoes());
+    const promessa = b.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = sockets.at(-1);
+    for (let i = 0; i < 25; i++) b.diagnosticar('tx-erro', { i });
+    expect(ws.mensagens().filter((m) => m.type === 'diagnostic')).toHaveLength(0);
+
+    ws.abrir();
+    await promessa;
+
+    const erros = diagnosticos(ws, 'tx-erro');
+    expect(erros).toHaveLength(20);
+    expect(erros[0].dados.i).toBe(5);
+    expect(erros.at(-1).dados.i).toBe(24);
+    b.stop();
+  });
+
+  it('informa cada tentativa de reconexão e o sucesso, com o tempo fora', async () => {
+    const { b, ws } = await noArComRelogio();
+    ws.disparar('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    sockets.at(-1).disparar('error');
+    await vi.advanceTimersByTimeAsync(2000);
+    const novo = sockets.at(-1);
+    novo.abrir();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(diagnosticos(novo, 'tx-reconexao').map((m) => m.dados)).toEqual([
+      { tentativa: 1, atrasoMs: 1000 },
+      { tentativa: 2, atrasoMs: 2000 },
+      { ok: true, tentativas: 2, foraMs: 3000 },
+    ]);
+    b.stop();
+  });
+
+  it('informa a saúde a cada 60s enquanto transmite, e para ao encerrar', async () => {
+    const { b, ws } = await noArComRelogio();
+    ws.receber({ type: 'state', viewers: 2, streams: [] });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const [saude] = diagnosticos(ws, 'tx-saude');
+    expect(saude.dados).toMatchObject({
+      viewers: 2,
+      quadrosDescartados: 0,
+      filaEncoder: 0,
+      bufferedKB: 0,
+    });
+    for (const campo of ['fps', 'bitrate', 'w', 'h']) {
+      expect(typeof saude.dados[campo]).toBe('number');
+    }
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(diagnosticos(ws, 'tx-saude')).toHaveLength(2);
+
+    b.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(diagnosticos(ws, 'tx-saude')).toHaveLength(2);
+  });
+
+  it('informa o fim da captura quando a faixa termina', async () => {
+    const { b, ws, stream } = await noAr();
+
+    stream.getVideoTracks()[0].disparar('ended');
+
+    expect(diagnosticos(ws, 'tx-captura-fim')).toHaveLength(1);
+    expect(b.isRunning()).toBe(false);
+  });
+});

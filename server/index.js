@@ -34,6 +34,93 @@ const diagnostico = createDiagnosticLogger({
 const pessoa = (uid) =>
   crypto.createHash('sha256').update(String(uid)).digest('base64url').slice(0, 8);
 
+// Eventos que o cliente pode mandar pelo canal genérico de diagnóstico. Fora
+// daqui é ignorado em silêncio: o canal é aberto a qualquer socket autenticado e
+// não pode virar um jeito de escrever o que quiser no log.
+const EVENTOS_DIAGNOSTICO = new Set([
+  'viewer-visibilidade',
+  'viewer-silencio',
+  'viewer-retomada',
+  'viewer-saude',
+  'viewer-fila',
+  'viewer-tamanho',
+  'viewer-arranque',
+  'tx-saude',
+  'tx-reconexao',
+  'tx-captura-travou',
+  'tx-captura-fim',
+  'tx-qualidade',
+  'tx-visibilidade',
+  'tx-codec',
+  'tx-erro',
+]);
+const CLIENTE_POR_MINUTO = 30;
+
+/**
+ * Deixa passar só números, booleanos e textos curtos, sem aninhamento. É o que
+ * garante que nome, link ou texto livre não chegam ao log pelo cliente.
+ */
+export function sanearDadosCliente(dados) {
+  const saida = {};
+  if (!dados || typeof dados !== 'object' || Array.isArray(dados)) return saida;
+  let n = 0;
+  for (const [chave, valor] of Object.entries(dados)) {
+    if (n >= 16) break;
+    if (!/^[a-zA-Z0-9_]{1,24}$/.test(chave)) continue;
+    if (chave === '__proto__') continue;
+    if (typeof valor === 'number' && Number.isFinite(valor)) saida[chave] = valor;
+    else if (typeof valor === 'boolean') saida[chave] = valor;
+    else if (typeof valor === 'string') saida[chave] = valor.slice(0, 60);
+    else continue;
+    n++;
+  }
+  return saida;
+}
+
+/**
+ * Registra um evento de diagnóstico vindo do cliente. Devolve true se a
+ * mensagem era do canal (mesmo descartada), para o chamador não tratá-la de
+ * novo. `log` só muda nos testes, onde o diagnóstico real fica desligado. O limite é por socket, em janela deslizante de um minuto.
+ */
+export function registrarDiagnosticoCliente(
+  ws,
+  msg,
+  { sala, pessoa: quem },
+  agora = Date.now(),
+  log = diagnostico.log,
+) {
+  if (msg.type !== 'diagnostic' || !EVENTOS_DIAGNOSTICO.has(msg.event)) return false;
+
+  const janela = (ws.__diagJanela ??= []);
+  while (janela.length && agora - janela[0] > 60_000) janela.shift();
+  if (janela.length >= CLIENTE_POR_MINUTO) {
+    ws.__diagDescartados = (ws.__diagDescartados ?? 0) + 1;
+    // Um aviso por minuto, com o total do período: logar a cada descarte
+    // reproduziria o excesso que o limite existe para evitar.
+    ws.__diagAviso ??= setTimeout(() => {
+      log('cliente.limite', {
+        papel: ws.__papel,
+        sala,
+        pessoa: quem,
+        descartados: ws.__diagDescartados,
+      });
+      ws.__diagDescartados = 0;
+      ws.__diagAviso = null;
+    }, 60_000).unref();
+    return true;
+  }
+  janela.push(agora);
+  // Os campos do servidor vêm por último: o cliente não pode sobrescrever
+  // papel, sala nem pessoa mandando chaves com esses nomes.
+  log('cliente.' + msg.event, {
+    ...sanearDadosCliente(msg.dados),
+    papel: ws.__papel,
+    sala,
+    pessoa: quem,
+  });
+  return true;
+}
+
 // Todo caminho que derruba a transmissão de alguém e fecha a aba de captura
 // passa por encerrarPresenca; aqui fica registrado qual deles foi.
 R.aoEncerrarPresenca(({ room, userId, origem, streams, abas }) => {
@@ -1148,8 +1235,9 @@ app.post('/api/admin/logout', (_req, res) => {
 
 // O diagnóstico mora no disco do servidor (Square Cloud), longe de quem
 // investiga. Daqui o admin baixa o final dele sem abrir o painel da hospedagem.
-app.get('/api/admin/diagnostico', requireAdmin, (_req, res) => {
-  res.type('application/x-ndjson').send(lerDiagnostico(diagnostico.arquivo));
+app.get('/api/admin/diagnostico', requireAdmin, (req, res) => {
+  const kb = Math.min(4096, Math.max(1, Math.floor(Number(req.query.kb)) || 128));
+  res.type('application/x-ndjson').send(lerDiagnostico(diagnostico.arquivo, kb * 1024));
 });
 
 app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
@@ -1421,6 +1509,8 @@ function handleBroadcaster(ws, room, info, fonte, substituir = false) {
     // O broadcaster manda ping periódico para manter a conexão viva.
     if (msg.type === 'ping') return;
 
+    if (registrarDiagnosticoCliente(ws, msg, { sala: room.id, pessoa: pessoa(info.id) })) return;
+
     if (msg.type === 'start') {
       if (entry.__substituido) {
         R.replaceStream(room, entry);
@@ -1506,6 +1596,8 @@ function handleViewer(ws, room, auth) {
       R.unwatch(room, ws, msg.slot);
       return;
     }
+
+    if (registrarDiagnosticoCliente(ws, msg, { sala: room.id, pessoa: pessoa(auth.uid) })) return;
 
     if (msg.type === 'diagnostic' && msg.event === 'viewer-recovery') {
       const agora = Date.now();
@@ -1692,6 +1784,11 @@ const sinalDeVida = setInterval(() => {
 }, HB_INTERVAL_MS);
 
 wss.on('connection', (ws) => {
+  // Um hb já na chegada: os clientes só armam o vigia de silêncio depois do
+  // primeiro hb, e esperar o próximo ciclo deixava até 10s de conexão nova sem
+  // vigia — se ela congelasse nessa janela, só o heartbeat de protocolo (40-60s)
+  // percebia.
+  if (ws.readyState === ws.OPEN) ws.send('{"type":"hb"}');
   ws.__missedPongs = 0;
   ws.on('pong', () => {
     ws.__missedPongs = 0;

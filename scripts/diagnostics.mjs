@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-const MAX_BYTES = 1_000_000;
+const MAX_BYTES = 5_000_000;
+// Um dia de uso real enche mais de um arquivo: guardar só o .1 apagava o começo
+// do dia justamente quando a análise acontece, no fim dele.
+const ARQUIVOS_ANTIGOS = 3;
 const MAX_UPLOAD_BYTES = 128_000;
 const SENSITIVE_KEY = /token|secret|password|senha|cookie|authorization|identity|proof|credential/i;
 
@@ -57,9 +60,11 @@ export function sanitizarDados(valor, chave = '') {
 function rotacionar(arquivo) {
   try {
     if (fs.statSync(arquivo).size < MAX_BYTES) return;
-    const anterior = `${arquivo}.1`;
-    fs.rmSync(anterior, { force: true });
-    fs.renameSync(arquivo, anterior);
+    fs.rmSync(`${arquivo}.${ARQUIVOS_ANTIGOS}`, { force: true });
+    for (let i = ARQUIVOS_ANTIGOS - 1; i >= 1; i--) {
+      if (fs.existsSync(`${arquivo}.${i}`)) fs.renameSync(`${arquivo}.${i}`, `${arquivo}.${i + 1}`);
+    }
+    fs.renameSync(arquivo, `${arquivo}.1`);
   } catch {
     // Arquivo ainda não existe ou não pode ser medido; a próxima escrita diz.
   }

@@ -293,6 +293,17 @@ export function createBroadcaster({
   let displaySurface = null;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
+  let quedaEm = 0;
+  // Diagnóstico para o servidor. Pronto só depois do 'slot', porque antes disso
+  // a conexão ainda pode ser recusada; o que nasce fora do ar espera na fila e
+  // sai quando o socket volta, com os mais antigos perdendo a vaga.
+  const DIAG_FILA_MAX = 20;
+  const filaDiag = [];
+  let diagPronto = false;
+  let diagTimer = null;
+  let diagDesde = 0;
+  let diagQuadros = 0;
+  let diagDescartados = 0;
   let keepaliveTimer = null;
   // Guarda a config e audioConfig mais recentes para reenviar após reconexão.
   let lastSentConfig = null;
@@ -345,6 +356,44 @@ export function createBroadcaster({
     }
   }
 
+  function diagnosticar(evento, dados = {}) {
+    const msg = JSON.stringify({ type: 'diagnostic', event: evento, dados });
+    if (diagPronto && ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(msg);
+        return;
+      } catch {
+        /* caiu entre a checagem e o envio: vai para a fila */
+      }
+    }
+    filaDiag.push(msg);
+    if (filaDiag.length > DIAG_FILA_MAX) filaDiag.shift();
+  }
+
+  function esvaziarDiag() {
+    diagPronto = true;
+    while (filaDiag.length && ws?.readyState === WebSocket.OPEN) ws.send(filaDiag.shift());
+  }
+
+  function diagnosticarCodec() {
+    diagnosticar('tx-codec', {
+      codec: config.codec,
+      w: config.width,
+      h: config.height,
+      fps,
+      bitrate: config.bitrate,
+      hardware: config.hardwareAcceleration === 'prefer-hardware',
+    });
+  }
+
+  function diagnosticarFimDaCaptura() {
+    diagnosticar('tx-captura-fim', {
+      motivo: 'faixa-ended',
+      fonte,
+      superficie: displaySurface ?? 'desconhecida',
+    });
+  }
+
   function createEncoder() {
     if (encoder && encoder.state !== 'closed') {
       try {
@@ -357,10 +406,12 @@ export function createBroadcaster({
       output: onEncoded,
       error: (err) => {
         console.warn(`[encoder error] ${err.message}, recriando...`);
+        diagnosticar('tx-erro', { origem: 'video', nome: err?.name ?? 'Error' });
       },
     });
     encoder.configure(config);
     wantKeyframe = true;
+    diagnosticarCodec();
   }
 
   async function start() {
@@ -372,6 +423,7 @@ export function createBroadcaster({
     displaySurface = track.getSettings?.().displaySurface ?? null;
     track.contentHint = 'motion';
     track.addEventListener('ended', () => {
+      diagnosticarFimDaCaptura();
       if (onTrackEnded) {
         onTrackEnded();
       } else {
@@ -436,12 +488,34 @@ export function createBroadcaster({
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
       });
+      diagQuadros += frames;
+      diagDescartados += encoderDrops + networkDrops;
       bytes = 0;
       frames = 0;
       capturedFrames = 0;
       encoderDrops = 0;
       networkDrops = 0;
     }, 1000);
+
+    diagDesde = Date.now();
+    diagQuadros = 0;
+    diagDescartados = 0;
+    diagTimer = setInterval(() => {
+      const agora = Date.now();
+      diagnosticar('tx-saude', {
+        fps: Math.round(diagQuadros / Math.max(1, (agora - diagDesde) / 1000)),
+        bitrate,
+        w: config?.width ?? 0,
+        h: config?.height ?? 0,
+        viewers,
+        quadrosDescartados: diagDescartados,
+        filaEncoder: encoder?.encodeQueueSize ?? 0,
+        bufferedKB: Math.round((ws?.bufferedAmount ?? 0) / 1024),
+      });
+      diagDesde = agora;
+      diagQuadros = 0;
+      diagDescartados = 0;
+    }, 60_000);
 
     startAntiSleep();
     pump(track);
@@ -721,7 +795,10 @@ export function createBroadcaster({
       audioEncoder = new AudioEncoder({
         output: onAudioEncoded,
         // Som é acessório: se o encoder cair, a tela continua no ar.
-        error: (err) => console.warn('[audio encoder]', err.message),
+        error: (err) => {
+          console.warn('[audio encoder]', err.message);
+          diagnosticar('tx-erro', { origem: 'audio', nome: err?.name ?? 'Error' });
+        },
       });
       audioEncoder.configure({
         codec: 'opus',
@@ -1146,6 +1223,12 @@ export function createBroadcaster({
         direct: Boolean(window.MediaStreamTrackProcessor),
         captureFps: source.frameRate ?? null,
       });
+      diagnosticar('tx-qualidade', {
+        motivo: 'desempenho',
+        bitrate,
+        w: config.width,
+        h: config.height,
+      });
       onAviso?.(
         `Desempenho ajustado para ${target.width}×${target.height} para manter a transmissão fluida.`,
       );
@@ -1179,6 +1262,12 @@ export function createBroadcaster({
       config = { ...config, bitrate };
       encoder?.configure?.(config);
       wantKeyframe = true;
+      diagnosticar('tx-qualidade', {
+        motivo: 'recuperou',
+        bitrate,
+        w: config.width,
+        h: config.height,
+      });
       onAviso?.(
         `A rede estabilizou; a qualidade subiu para ${(bitrate / 1_000_000).toFixed(1)} Mb/s.`,
       );
@@ -1197,6 +1286,7 @@ export function createBroadcaster({
     config = { ...config, bitrate };
     encoder?.configure?.(config);
     wantKeyframe = true;
+    diagnosticar('tx-qualidade', { motivo: 'rede', bitrate, w: config.width, h: config.height });
     onAviso?.(
       `A rede ficou congestionada; o bitrate foi ajustado para ${(bitrate / 1_000_000).toFixed(1)} Mb/s para evitar travamentos.`,
     );
@@ -1325,6 +1415,7 @@ export function createBroadcaster({
         clearTimeout(timeout);
         reconnectAttempts = 0;
         startKeepalive();
+        esvaziarDiag();
         resolve();
       };
 
@@ -1426,11 +1517,14 @@ export function createBroadcaster({
       return;
     }
 
+    if (reconnectAttempts === 0) quedaEm = Date.now();
     reconnectAttempts++;
     const delay = Math.min(
       RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1),
       RECONNECT_MAX_MS,
     );
+    diagPronto = false;
+    diagnosticar('tx-reconexao', { tentativa: reconnectAttempts, atrasoMs: delay });
     onAviso?.(
       `Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
     );
@@ -1520,8 +1614,15 @@ export function createBroadcaster({
         });
 
         // Reconectou com sucesso.
+        const tentativas = reconnectAttempts;
         reconnectAttempts = 0;
         startKeepalive();
+        esvaziarDiag();
+        diagnosticar('tx-reconexao', {
+          ok: true,
+          tentativas,
+          foraMs: Date.now() - quedaEm,
+        });
 
         // Reestabelece a transmissão no servidor.
         ws.send(JSON.stringify({ type: 'start' }));
@@ -1618,6 +1719,7 @@ export function createBroadcaster({
       await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
       track.contentHint = 'motion';
       track.addEventListener('ended', () => {
+        diagnosticarFimDaCaptura();
         if (onTrackEnded) {
           onTrackEnded();
         } else {
@@ -1738,6 +1840,8 @@ export function createBroadcaster({
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     reconnectAttempts = 0;
+    clearInterval(diagTimer);
+    diagTimer = null;
     stopKeepalive();
     stopIdleHeartbeat();
     if (typeof ultimoQuadro?.close === 'function') {
@@ -1792,5 +1896,6 @@ export function createBroadcaster({
     temSom: () => Boolean(audioEncoder || nativeAudio),
     somBloqueado: () => somBloqueado,
     isRunning: () => running,
+    diagnosticar,
   };
 }

@@ -541,3 +541,129 @@ describe('vigia de silêncio e retomada', () => {
     expect(socket.sent.some((m) => m.type === 'watch')).toBe(false);
   });
 });
+
+describe('diagnóstico enviado ao servidor', () => {
+  const diagnosticos = (socket, evento) =>
+    socket.sent.filter((m) => m.type === 'diagnostic' && m.event === evento);
+
+  async function assistirAna() {
+    const socket = await entrar();
+    anunciar(socket);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    return socket;
+  }
+
+  const definirVisibilidade = (estado) => {
+    Object.defineProperty(document, 'visibilityState', { value: estado, configurable: true });
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  };
+
+  it('anuncia o arranque ao abrir o socket e marca a reconexão seguinte', async () => {
+    const primeiro = await entrar();
+    expect(diagnosticos(primeiro, 'viewer-arranque')[0].dados).toMatchObject({
+      discord: false,
+      reconexao: false,
+    });
+
+    primeiro.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    sockets.at(-1).dispatch('open');
+
+    expect(diagnosticos(sockets.at(-1), 'viewer-arranque')[0].dados.reconexao).toBe(true);
+  });
+
+  it('guarda o evento gerado com o socket morto e o envia quando ele reabre', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(25_000);
+    socket.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    const novo = sockets.at(-1);
+    expect(novo).not.toBe(socket);
+    expect(diagnosticos(socket, 'viewer-silencio')).toHaveLength(0);
+
+    novo.dispatch('open');
+
+    const [silencio] = diagnosticos(novo, 'viewer-silencio');
+    expect(silencio.dados.ms).toBeGreaterThanOrEqual(25_000);
+    // A fila sai antes do arranque da nova conexão.
+    expect(novo.sent.findIndex((m) => m.event === 'viewer-silencio')).toBeLessThan(
+      novo.sent.findIndex((m) => m.event === 'viewer-arranque'),
+    );
+  });
+
+  it('a fila offline guarda no máximo 20 eventos, descartando os mais antigos', async () => {
+    const socket = await assistirAna();
+    socket.dispatch('close');
+    for (let i = 0; i < 25; i++) {
+      Object.defineProperty(window, 'innerWidth', { value: 100 + i, configurable: true });
+      definirVisibilidade(i % 2 ? 'visible' : 'hidden');
+    }
+    await vi.advanceTimersByTimeAsync(1500);
+    const novo = sockets.at(-1);
+    novo.dispatch('open');
+
+    const visibilidade = diagnosticos(novo, 'viewer-visibilidade');
+    expect(visibilidade).toHaveLength(20);
+    expect(visibilidade[0].dados.w).toBe(105);
+    expect(visibilidade.at(-1).dados.w).toBe(124);
+  });
+
+  it('informa a visibilidade com o tempo que ficou oculto ao voltar', async () => {
+    const socket = await assistirAna();
+
+    definirVisibilidade('hidden');
+    await vi.advanceTimersByTimeAsync(4000);
+    definirVisibilidade('visible');
+
+    const [oculta, visivel] = diagnosticos(socket, 'viewer-visibilidade');
+    expect(oculta.dados).toMatchObject({ estado: 'hidden', streams: 1 });
+    expect(oculta.dados).not.toHaveProperty('ocultoMs');
+    expect(visivel.dados).toMatchObject({ estado: 'visible', streams: 1, ocultoMs: 4000 });
+  });
+
+  it('não informa visibilidade nem tamanho sem nenhuma transmissão assistida', async () => {
+    const socket = await entrar();
+
+    definirVisibilidade('hidden');
+    window.dispatchEvent(new dom.window.Event('resize'));
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(diagnosticos(socket, 'viewer-visibilidade')).toHaveLength(0);
+    expect(diagnosticos(socket, 'viewer-tamanho')).toHaveLength(0);
+  });
+
+  it('envia a saúde a cada 60s enquanto assiste', async () => {
+    const socket = await assistirAna();
+    expect(diagnosticos(socket, 'viewer-saude')).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const saude = diagnosticos(socket, 'viewer-saude');
+    expect(saude).toHaveLength(2);
+    expect(saude[0].dados).toMatchObject({
+      lagMs: 24,
+      w: 1280,
+      h: 720,
+      streams: 1,
+      recuperacoes: 0,
+      telaCheia: false,
+    });
+    expect(typeof saude[0].dados.fps).toBe('number');
+  });
+
+  it('informa a retomada automática com o tempo de ausência', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    await vi.advanceTimersByTimeAsync(7000);
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(diagnosticos(socket, 'viewer-retomada')[0].dados).toEqual({
+      fonte: 'tela',
+      ausenteMs: 7000,
+    });
+  });
+});

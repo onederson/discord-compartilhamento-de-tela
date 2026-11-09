@@ -19,7 +19,7 @@ import {
   fonteIndisponivel,
   opcoesTela,
   pedirDisplayMedia,
-} from '/shared/broadcaster.js?v=14';
+} from '/shared/broadcaster.js?v=15';
 
 const $ = (id) => document.getElementById(id);
 
@@ -254,6 +254,21 @@ function chamar(fonte) {
     document.title = ligado ? aviso : TITULO;
   }, 1200);
 }
+
+// Aba de captura escondida é o que faz o navegador estrangular timers e
+// captura. O diagnóstico vai pela conexão de quem está no ar; sem ninguém no
+// ar não há por onde mandar nem o que diagnosticar.
+let ocultoDesde = null;
+document.addEventListener('visibilitychange', () => {
+  const oculta = document.hidden;
+  const ocultoMs = !oculta && ocultoDesde !== null ? Date.now() - ocultoDesde : null;
+  ocultoDesde = oculta ? (ocultoDesde ?? Date.now()) : null;
+  const painel = FONTES.map((f) => paineis[f]).find((p) => p?.ativo());
+  painel?.diagnosticar('tx-visibilidade', {
+    estado: oculta ? 'hidden' : 'visible',
+    ...(ocultoMs === null ? {} : { ocultoMs }),
+  });
+});
 
 // Visto o recado, para de piscar — o destaque no bloco continua dizendo qual é.
 document.addEventListener('visibilitychange', () => {
@@ -781,6 +796,8 @@ function criarPainel(fonte) {
           }
           return;
         }
+        if (msg.startsWith('A captura travou'))
+          broadcaster?.diagnosticar?.('tx-captura-travou', { fonte });
         if (msg === 'Áudio isolado do Firefox ligado.') {
           $('somAba').textContent = 'Reiniciar áudio do Firefox';
           setStatus(msg, 'ok');
@@ -930,6 +947,7 @@ function criarPainel(fonte) {
     indisponivel: () => Boolean(indisponivel),
     aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
+    diagnosticar: (evento, dados) => broadcaster?.diagnosticar?.(evento, dados),
     // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
     parar: () => {
       broadcaster?.stop();

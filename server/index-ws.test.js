@@ -17,7 +17,7 @@ vi.spyOn(console, 'error').mockImplementation(() => {});
 const GRACA_MS = 300;
 process.env.VIEWER_GRACE_MS = String(GRACA_MS);
 
-const { server, wss } = await import('./index.js');
+const { server, wss, sanearDadosCliente, registrarDiagnosticoCliente } = await import('./index.js');
 const { signToken } = await import('./tokens.js');
 const R = await import('./rooms.js');
 if (!server.listening) await new Promise((pronto) => server.once('listening', pronto));
@@ -628,5 +628,90 @@ describe('espectador', () => {
     expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
     expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
     expect(room.broadcasters.size).toBe(1);
+  });
+});
+
+describe('diagnóstico do cliente', () => {
+  const msg = (event, dados) => ({ type: 'diagnostic', event, dados });
+  const contexto = { sala: 'sala-1', pessoa: 'abc12345' };
+
+  it('sanea os dados: chaves simples, valores primitivos e texto curto', () => {
+    const muitas = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, i]));
+    const limpo = sanearDadosCliente({
+      ok: 1,
+      'chave inválida': 1,
+      [`${'a'.repeat(25)}`]: 1,
+      nan: NaN,
+      infinito: Infinity,
+      sim: true,
+      texto: 'x'.repeat(100),
+      aninhado: { a: 1 },
+      lista: [1],
+      nulo: null,
+    });
+
+    expect(limpo).toEqual({ ok: 1, sim: true, texto: 'x'.repeat(60) });
+    expect(Object.keys(sanearDadosCliente(muitas))).toHaveLength(16);
+    expect(sanearDadosCliente('texto')).toEqual({});
+    expect(sanearDadosCliente([1, 2])).toEqual({});
+  });
+
+  it('grava eventos da allowlist com papel, sala e pessoa, e ignora o resto', () => {
+    const ws = { __papel: 'atividade' };
+    const log = vi.fn();
+
+    expect(
+      registrarDiagnosticoCliente(ws, msg('viewer-saude', { fps: 30 }), contexto, 0, log),
+    ).toBe(true);
+    expect(registrarDiagnosticoCliente(ws, msg('qualquer-coisa', { a: 1 }), contexto, 0, log)).toBe(
+      false,
+    );
+    expect(registrarDiagnosticoCliente(ws, msg('viewer-recovery'), contexto, 0, log)).toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith('cliente.viewer-saude', {
+      papel: 'atividade',
+      sala: 'sala-1',
+      pessoa: 'abc12345',
+      fps: 30,
+    });
+  });
+
+  it('limita 30 eventos por minuto por socket e avisa uma vez com o total descartado', () => {
+    vi.useFakeTimers();
+    try {
+      const ws = { __papel: 'transmissao' };
+      const log = vi.fn();
+      for (let i = 0; i < 35; i++) {
+        registrarDiagnosticoCliente(ws, msg('tx-saude', { i }), contexto, 1000, log);
+      }
+      expect(log).toHaveBeenCalledTimes(30);
+
+      vi.advanceTimersByTime(60_000);
+      expect(log).toHaveBeenCalledTimes(31);
+      expect(log).toHaveBeenLastCalledWith('cliente.limite', {
+        papel: 'transmissao',
+        sala: 'sala-1',
+        pessoa: 'abc12345',
+        descartados: 5,
+      });
+
+      // Passada a janela, volta a aceitar.
+      registrarDiagnosticoCliente(ws, msg('tx-saude'), contexto, 70_000, log);
+      expect(log).toHaveBeenCalledTimes(32);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('o servidor aceita o canal na atividade e no transmissor sem derrubar o socket', async () => {
+    const { transmissor, espectador } = await noAr();
+    transmissor.send(JSON.stringify(msg('tx-saude', { fps: 30 })));
+    espectador.send(JSON.stringify(msg('viewer-saude', { fps: 30 })));
+    espectador.send(JSON.stringify({ type: 'diagnostic', event: 'viewer-recovery' }));
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transmissor.readyState).toBe(WebSocket.OPEN);
+    expect(espectador.readyState).toBe(WebSocket.OPEN);
   });
 });

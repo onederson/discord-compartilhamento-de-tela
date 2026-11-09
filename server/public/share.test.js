@@ -4,7 +4,7 @@ import { JSDOM } from 'jsdom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const capture = vi.hoisted(() => ({ instances: [] }));
-vi.mock('/shared/broadcaster.js?v=14', () => ({
+vi.mock('/shared/broadcaster.js?v=15', () => ({
   supportError: () => null,
   fonteIndisponivel: () => null,
   opcoesTela: () => ({ video: true }),

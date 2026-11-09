@@ -158,6 +158,12 @@ let participants = [];
 let reconnectDelay = 1000;
 let reconnectTimer = null;
 let vigiaSilencio = null;
+// Diagnóstico para o servidor (ver docs/diagnostico.md). Eventos gerados com o
+// socket fora do ar esperam aqui, e saem quando ele reabre; os mais antigos
+// perdem a vaga, porque o que importa é o que aconteceu perto da volta.
+const DIAG_FILA_MAX = 20;
+const filaDiag = [];
+let jaConectouNestaCarga = false;
 let connectionTimer = null;
 let connectionState = 'connecting';
 let lagTimer = null;
@@ -378,6 +384,24 @@ function entradasDoGrid() {
   return saida;
 }
 
+function diag(evento, dados = {}) {
+  const msg = JSON.stringify({ type: 'diagnostic', event: evento, dados });
+  if (ws?.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(msg);
+      return;
+    } catch {
+      /* caiu entre a checagem e o envio: vai para a fila */
+    }
+  }
+  filaDiag.push(msg);
+  if (filaDiag.length > DIAG_FILA_MAX) filaDiag.shift();
+}
+
+function esvaziarFilaDiag() {
+  while (filaDiag.length && ws?.readyState === WebSocket.OPEN) ws.send(filaDiag.shift());
+}
+
 const chaveRetomada = (userId, fonte) => `${userId}|${fonte ?? 'tela'}`;
 
 // Chamado antes de apagar o slot de `watching` por motivo alheio à vontade da
@@ -397,6 +421,11 @@ function retomarSeLembrado(slot) {
   retomarDepois.delete(chave);
   if (Date.now() > expiraEm || watching.has(slot)) return;
   // Quem já está no palco com outra transmissão viva não perde o foco.
+  diag('viewer-retomada', {
+    fonte: info.fonte ?? 'tela',
+    // A janela é fixa, então o momento em que foi lembrada sai da validade.
+    ausenteMs: Date.now() - (expiraEm - RETOMAR_JANELA_MS),
+  });
   watchSlot(slot, { focar: activeSlot === null || !available.has(activeSlot) });
 }
 
@@ -1219,6 +1248,9 @@ function openStream(slot, userId) {
       },
       onAviso: (tipo, dados) => {
         caixaPreta.registrar(`video.${tipo}`, { slot, ...dados });
+        if (tipo === 'fila-cheia' || tipo === 'fila-normalizou') {
+          diag('viewer-fila', { tipo, fila: dados?.fila, descartados: dados?.descartados });
+        }
         if (tipo === 'decoder-erro' || tipo === 'fila-cheia') {
           reportLog('warn', `Player: ${tipo}`, { slot, ...dados }, 'decoder');
         }
@@ -2089,6 +2121,16 @@ function connect() {
     $('grid').hidden = false;
     setEmpty('Ninguém na sala', 'Aguardando participantes.');
 
+    esvaziarFilaDiag();
+    diag('viewer-arranque', {
+      discord: inDiscord,
+      movel: clienteMovel,
+      w: window.innerWidth,
+      h: window.innerHeight,
+      reconexao: jaConectouNestaCarga,
+    });
+    jaConectouNestaCarga = true;
+
     // O apelido é do cliente, então precisa ser reenviado a cada conexão —
     // inclusive nas reconexões, senão o nome volta ao do Discord sozinho.
     const saved = storedName();
@@ -2138,6 +2180,8 @@ function connect() {
           // Num socket meio-aberto o close do navegador pode levar minutos:
           // a queda é tratada já, e o guard `ws !== socket` ignora o close real.
           aoFecharSocket(socket, { code: 4000, reason: 'silencio' });
+          // Depois da queda ws é null, então cai na fila e sai na reconexão.
+          diag('viewer-silencio', { ms });
           try {
             socket.close();
           } catch {
@@ -3173,9 +3217,24 @@ window.addEventListener('pagehide', (e) => {
 // visibilitychange). É a linha do tempo que diz o que veio antes da queda.
 window.addEventListener('blur', () => caixaPreta.registrar('janela.blur'));
 window.addEventListener('focus', () => caixaPreta.registrar('janela.focus'));
-document.addEventListener('visibilitychange', () =>
-  caixaPreta.registrar('visibilidade', { estado: document.visibilityState }),
-);
+let ocultoDesde = null;
+document.addEventListener('visibilitychange', () => {
+  caixaPreta.registrar('visibilidade', { estado: document.visibilityState });
+  const oculto = document.visibilityState === 'hidden';
+  const ocultoMs = !oculto && ocultoDesde !== null ? Date.now() - ocultoDesde : null;
+  ocultoDesde = oculto ? (ocultoDesde ?? Date.now()) : null;
+  // Responde se a janelinha/picture-in-picture do Discord conta como oculta,
+  // o que faz o player descartar quadros.
+  if (streams.size) {
+    diag('viewer-visibilidade', {
+      estado: document.visibilityState,
+      w: window.innerWidth,
+      h: window.innerHeight,
+      streams: streams.size,
+      ...(ocultoMs === null ? {} : { ocultoMs }),
+    });
+  }
+});
 document.addEventListener('freeze', () => caixaPreta.registrar('pagina.congelada'));
 document.addEventListener('resume', () => caixaPreta.registrar('pagina.retomada'));
 window.addEventListener('pageshow', (e) =>
@@ -3186,10 +3245,10 @@ window.addEventListener('online', () => caixaPreta.registrar('rede.online'));
 let redimensionarTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(redimensionarTimer);
-  redimensionarTimer = setTimeout(
-    () => caixaPreta.registrar('janela.tamanho', { w: innerWidth, h: innerHeight }),
-    500,
-  );
+  redimensionarTimer = setTimeout(() => {
+    caixaPreta.registrar('janela.tamanho', { w: window.innerWidth, h: window.innerHeight });
+    if (streams.size) diag('viewer-tamanho', { w: window.innerWidth, h: window.innerHeight });
+  }, 500);
 });
 
 // Travamento do thread principal: o Discord mostra "Recarregar atividade"
@@ -3231,3 +3290,25 @@ setInterval(() => {
     reportLog('warn', 'Memória da atividade perto do limite', caixaPreta.resumo(), 'memoria');
   }
 }, 30_000);
+
+// Resumo de quem assiste, um por minuto, só do stream em foco: somar fontes
+// diferentes não diria nada. Vai ao servidor, ao contrário da amostra acima.
+setInterval(() => {
+  const s = streams.get(activeSlot) ?? streams.values().next().value;
+  if (!s) return;
+  const [w, h] = (s.player.getSizes?.().video ?? '').split('×').map(Number);
+  const mem = performance.memory;
+  diag('viewer-saude', {
+    fps: s.fps ?? 0,
+    lagMs: Math.max(0, s.player.getLag()),
+    w: w || 0,
+    h: h || 0,
+    fila: s.player.getFila?.() ?? 0,
+    recuperacoes: s.recoveries ?? 0,
+    memMb: mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null,
+    visivel: document.visibilityState === 'visible',
+    foco: document.hasFocus(),
+    telaCheia,
+    streams: streams.size,
+  });
+}, 60_000);
