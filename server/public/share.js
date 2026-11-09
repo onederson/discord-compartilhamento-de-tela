@@ -95,6 +95,10 @@ function aplicarOpcoes(novas) {
 mostrarQualidade();
 
 const paineis = {};
+// Memória curta para o relato de problema: últimos avisos e últimas métricas.
+const AVISOS_GUARDADOS = 30;
+const avisosRecentes = []; // { fonte, msg, t }
+const ultimosStats = {}; // fonte -> últimas métricas, sem a lista de espectadores
 window.name = 'discord-screen-captura';
 
 function atualizarStatusGlobal() {
@@ -739,6 +743,7 @@ function criarPainel(fonte) {
         );
       },
       onStats: (s) => {
+        ultimosStats[fonte] = { ...s, watchers: undefined };
         el('viewers').textContent = s.viewers;
         el('fps').textContent = `${s.fps} fps`;
         el('fps').title =
@@ -786,6 +791,10 @@ function criarPainel(fonte) {
         }
       },
       onAviso: (msg) => {
+        if (msg) {
+          avisosRecentes.push({ fonte, msg: String(msg).slice(0, 200), t: Date.now() });
+          if (avisosRecentes.length > AVISOS_GUARDADOS) avisosRecentes.shift();
+        }
         if (!msg) {
           if (broadcaster?.getSettings) {
             const s = broadcaster.getSettings();
@@ -1046,4 +1055,125 @@ $('somAba').addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', () => {
   for (const f of FONTES) paineis[f]?.parar();
+});
+
+// ------------------------------------------------------------- reportar problema
+
+const BUG_MIN = 10;
+let bugEnviando = false;
+let bugEnviado = false;
+let bugFoco = null;
+
+function contextoDoRelato() {
+  const agora = Date.now();
+  return {
+    avisos: avisosRecentes.map((a) => ({
+      fonte: a.fonte,
+      msg: a.msg,
+      haS: Math.round((agora - a.t) / 1000),
+    })),
+    stats: Object.fromEntries(
+      FONTES.filter((f) => paineis[f]?.ativo() && ultimosStats[f]).map((f) => [f, ultimosStats[f]]),
+    ),
+    controle: $('control-status').textContent,
+    fontesAtivas: FONTES.filter((f) => paineis[f]?.ativo()),
+    userAgent: navigator.userAgent.match(/(Chrome|Firefox|Safari|Edg)\/[\d.]+/g)?.join(' ') ?? null,
+    visibilidade: document.visibilityState,
+  };
+}
+
+function atualizarBug() {
+  const n = $('bug-text').value.length;
+  $('bug-count').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bug-send').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
+}
+
+function mostrarStatusBug(texto, estado) {
+  $('bug-status').textContent = texto;
+  $('bug-status').className = estado ? `status ${estado}` : 'status';
+}
+
+function abrirBug() {
+  bugFoco = document.activeElement;
+  bugEnviando = false;
+  bugEnviado = false;
+  $('bug-text').value = '';
+  $('bug-text').disabled = false;
+  $('bug-cancel').textContent = 'Cancelar';
+  mostrarStatusBug('');
+  atualizarBug();
+  $('bug-modal').hidden = false;
+  $('bug-text').focus();
+}
+
+function fecharBug() {
+  $('bug-modal').hidden = true;
+  bugFoco?.focus?.();
+}
+
+async function enviarBug() {
+  if ($('bug-send').disabled) return;
+  bugEnviando = true;
+  $('bug-text').disabled = true;
+  $('bug-send').textContent = 'Enviando…';
+  mostrarStatusBug('');
+  atualizarBug();
+  try {
+    const r = await fetch('/api/relatos/bug', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        origem: 'captura',
+        texto: $('bug-text').value.trim(),
+        contexto: contextoDoRelato(),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error ?? `Servidor respondeu ${r.status}.`);
+    bugEnviado = true;
+    mostrarStatusBug(`Recebido! Código ${data.id}`, 'ok');
+    $('bug-cancel').textContent = 'Fechar';
+  } catch (err) {
+    // Só mensagem do servidor ou texto fixo daqui; nada de err.message de rede.
+    mostrarStatusBug(
+      err.name === 'Error' ? err.message : 'Não foi possível falar com o servidor.',
+      'error',
+    );
+    $('bug-text').disabled = false;
+  } finally {
+    bugEnviando = false;
+    $('bug-send').textContent = 'Enviar';
+    atualizarBug();
+  }
+}
+
+$('bug-open').addEventListener('click', abrirBug);
+$('bug-text').addEventListener('input', atualizarBug);
+$('bug-send').addEventListener('click', enviarBug);
+$('bug-cancel').addEventListener('click', fecharBug);
+$('bug-modal').addEventListener('click', (e) => {
+  if (e.target === $('bug-modal')) fecharBug();
+});
+document.addEventListener('keydown', (e) => {
+  if ($('bug-modal').hidden) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    fecharBug();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focaveis = [...$('bug-modal').querySelectorAll('button, textarea')].filter(
+    (el) => !el.disabled,
+  );
+  const primeiro = focaveis[0];
+  const ultimo = focaveis.at(-1);
+  if (e.shiftKey && document.activeElement === primeiro) {
+    e.preventDefault();
+    ultimo?.focus();
+  } else if (!e.shiftKey && document.activeElement === ultimo) {
+    e.preventDefault();
+    primeiro?.focus();
+  }
 });

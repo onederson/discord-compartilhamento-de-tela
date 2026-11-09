@@ -7,7 +7,15 @@
  * o módulo já foi avaliado. Daí um arquivo de preparação, que o Vitest roda
  * antes de importar o teste.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 process.env.NODE_ENV = 'test';
+
+// Relatos e bloqueios em pasta descartável: um teste que importa o servidor não
+// pode deixar uma .dados de mentira dentro do repositório.
+process.env.RELATOS_DIR ??= fs.mkdtempSync(path.join(os.tmpdir(), 'relatos-teste-'));
 
 /**
  * O `.env` da máquina não entra no teste.

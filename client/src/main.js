@@ -24,6 +24,10 @@ const P = inDiscord ? '/.proxy' : '';
 
 let logWindow = 0;
 let logCount = 0;
+// Últimos registros de log, só em memória, para anexar a um relato de problema.
+// Entra tudo o que passa por reportLog, inclusive o que o limite de envio barra.
+const ULTIMOS_LOGS = 20;
+const ultimosLogs = []; // { nivel, msg, t }
 /**
  * @param {string} [event] nome próprio no diagnóstico do servidor
  *   (crash-suspeito, unload, decoder, fila, memoria); sem ele vira client.error.
@@ -32,6 +36,8 @@ let logCount = 0;
  */
 function reportLog(level, message, details = {}, event = undefined, { beacon = false } = {}) {
   const now = Date.now();
+  ultimosLogs.push({ nivel: level, msg: String(message).slice(0, 200), t: now });
+  if (ultimosLogs.length > ULTIMOS_LOGS) ultimosLogs.shift();
   if (now - logWindow >= 60_000) {
     logWindow = now;
     logCount = 0;
@@ -166,6 +172,8 @@ const filaDiag = [];
 let jaConectouNestaCarga = false;
 let connectionTimer = null;
 let connectionState = 'connecting';
+// Nome do bundle que o servidor diz ser o atual, para o contexto dos relatos.
+let assetServidor = null;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
@@ -826,6 +834,22 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
       unwatchSlot(slot);
     });
     tile.append(stop);
+
+    // Só em transmissão de outra pessoa: denunciar a própria não faz sentido.
+    if (!isMe) {
+      const denunciar = document.createElement('button');
+      denunciar.className = 'tile-report';
+      denunciar.type = 'button';
+      denunciar.dataset.tip = 'Denunciar transmissão';
+      denunciar.setAttribute('aria-label', 'Denunciar transmissão');
+      denunciar.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>';
+      denunciar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        abrirDenuncia(slot);
+      });
+      tile.append(denunciar);
+    }
   } else if (slot !== null) {
     // O convite tem botão próprio, que para o clique antes de chegar no tile.
     if (!palco) tile.addEventListener('click', aoClicar);
@@ -1310,6 +1334,7 @@ function closeStream(slot) {
   s.audio?.stop();
   s.canvas.remove();
   streams.delete(slot);
+  printsPorSlot.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
 }
@@ -1472,6 +1497,7 @@ async function boot() {
   }
 
   clientId = params.get('client_id') || cfg.clientId || null;
+  assetServidor = cfg.asset ?? null;
   checkVersion(cfg.asset);
   clearTimeout(vigia);
 
@@ -1709,6 +1735,7 @@ async function showLobby() {
   $('diagnosticText').hidden = true;
   $('diagnosticText').value = '';
   $('leaveRoom').hidden = true;
+  $('reportBug').hidden = true;
   $('roomSettings').hidden = true;
   $('share').hidden = true;
   $('camera').hidden = true;
@@ -1884,6 +1911,7 @@ function openRoom(tokens, room) {
   $('lobby').hidden = true;
   $('empty').hidden = false;
   $('share').hidden = false;
+  $('reportBug').hidden = false;
   $('camera').hidden = false;
   $('quality').hidden = false;
   $('people').hidden = false;
@@ -3009,6 +3037,284 @@ $('recoverStreams').addEventListener('click', () => {
   }
   toast('Novo quadro solicitado. Sua transmissão continua aberta.');
 });
+// ------------------------------------------------------------------- relatos
+
+// Os dois formulários falam com o servidor pelo mesmo `post`, sem o retry de
+// identidade: o token da sala é o que autentica, e não há crachá a renovar.
+const tokenDaSala = () => roomTokens?.viewerToken ?? null;
+
+function mostrarStatus(el, texto, { erro = true } = {}) {
+  el.textContent = texto;
+  el.classList.toggle('modal-ok', !erro);
+  el.hidden = !texto;
+}
+
+/**
+ * Resumo técnico anexado ao relato de problema. Só números e textos curtos:
+ * nada de nomes, tokens ou links. O token da sala vai só no campo próprio do
+ * pedido.
+ */
+function contextoDoRelato() {
+  const mem = performance.memory;
+  const agora = Date.now();
+  return {
+    caixaPreta: caixaPreta.resumo(),
+    bundle: import.meta.url.split('/').pop().split('?')[0],
+    bundleServidor: assetServidor,
+    inDiscord,
+    clienteMovel,
+    userAgent:
+      navigator.userAgent.match(/(Discord|Chrome|Firefox|Safari)\/[\d.]+/g)?.join(' ') ?? null,
+    janela: { w: window.innerWidth, h: window.innerHeight },
+    telaCheia,
+    visibilidade: document.visibilityState,
+    memMb: mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null,
+    connectionState,
+    streams: [...streams.entries()].map(([slot, s]) => {
+      const cfg = available.get(slot)?.config;
+      return {
+        slot,
+        fonte: available.get(slot)?.fonte === 'camera' ? 'camera' : 'tela',
+        fps: s.fps ?? 0,
+        lagMs: Math.max(0, s.player.getLag?.() ?? 0),
+        config: cfg
+          ? { codec: cfg.codec, codedWidth: cfg.codedWidth, codedHeight: cfg.codedHeight }
+          : null,
+        getSizes: s.player.getSizes?.() ?? null,
+        getFila: s.player.getFila?.() ?? 0,
+        recoveries: s.recoveries ?? 0,
+      };
+    }),
+    ultimosErros: ultimosLogs.map((l) => ({
+      nivel: l.nivel,
+      msg: l.msg,
+      haS: Math.round((agora - l.t) / 1000),
+    })),
+  };
+}
+
+const BUG_MIN = 10;
+let bugEnviando = false;
+let bugEnviado = false;
+
+function atualizarBug() {
+  const n = $('bugText').value.length;
+  $('bugCount').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bugSend').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
+}
+
+function abrirBug() {
+  // Aberto pelo painel de diagnóstico, ele é recolhido para não competir.
+  setPanel(false);
+  bugEnviando = false;
+  bugEnviado = false;
+  $('bugText').value = '';
+  $('bugText').disabled = false;
+  $('bugCancel').textContent = 'Cancelar';
+  $('bugSend').textContent = 'Enviar';
+  mostrarStatus($('bugStatus'), '');
+  atualizarBug();
+  openModal('bugModal');
+  $('bugText').focus();
+}
+
+async function enviarBug() {
+  if ($('bugSend').disabled) return;
+  bugEnviando = true;
+  $('bugText').disabled = true;
+  $('bugSend').textContent = 'Enviando…';
+  mostrarStatus($('bugStatus'), '');
+  atualizarBug();
+  try {
+    const r = await post(
+      `${P}/api/relatos/bug`,
+      {
+        token: tokenDaSala(),
+        origem: 'atividade',
+        texto: $('bugText').value.trim(),
+        contexto: contextoDoRelato(),
+      },
+      { retry: false },
+    );
+    bugEnviado = true;
+    mostrarStatus($('bugStatus'), `Recebido! Código ${r.id}`, { erro: false });
+    $('bugCancel').textContent = 'Fechar';
+  } catch (err) {
+    mostrarStatus($('bugStatus'), err.message);
+    $('bugText').disabled = false;
+  } finally {
+    bugEnviando = false;
+    $('bugSend').textContent = 'Enviar';
+    atualizarBug();
+  }
+}
+
+$('reportBug').addEventListener('click', abrirBug);
+$('reportBugPanel').addEventListener('click', abrirBug);
+$('bugText').addEventListener('input', atualizarBug);
+$('bugSend').addEventListener('click', enviarBug);
+$('bugCancel').addEventListener('click', () => closeModal('bugModal'));
+$('bugModal').addEventListener('click', (e) => {
+  if (e.target === $('bugModal')) closeModal('bugModal');
+});
+
+// ----------------------------------------------------------------- denúncias
+
+const PRINT_INTERVALO_MS = 5_000;
+const PRINT_LARGURA = 960;
+const PRINTS_POR_SLOT = 3;
+const PRINT_MAX_DATAURL = 400_000;
+const DENUNCIA_OUTRO_MIN = 5;
+
+// slot -> últimos prints (Blob JPEG), do mais antigo para o mais novo.
+const printsPorSlot = new Map();
+
+/**
+ * Copia o canvas do player, reduzido, como JPEG. Se passar do limite do
+ * servidor, repete com qualidade menor; devolve null se nada couber.
+ */
+async function copiarCanvas(canvas) {
+  if (!canvas.width || !canvas.height) return null;
+  const escala = Math.min(1, PRINT_LARGURA / canvas.width);
+  const reduzido = document.createElement('canvas');
+  reduzido.width = Math.max(1, Math.round(canvas.width * escala));
+  reduzido.height = Math.max(1, Math.round(canvas.height * escala));
+  const ctx = reduzido.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(canvas, 0, 0, reduzido.width, reduzido.height);
+  for (const qualidade of [0.7, 0.5, 0.35, 0.2]) {
+    const blob = await new Promise((resolve) => reduzido.toBlob(resolve, 'image/jpeg', qualidade));
+    // 4/3 do binário em base64, mais o prefixo "data:image/jpeg;base64,".
+    if (blob && Math.ceil(blob.size / 3) * 4 + 23 <= PRINT_MAX_DATAURL) return blob;
+  }
+  return null;
+}
+
+async function blobParaDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return `data:image/jpeg;base64,${btoa(bin)}`;
+}
+
+async function guardarPrint(slot, s) {
+  const blob = await copiarCanvas(s.canvas);
+  // A transmissão pode ter fechado enquanto o JPEG era gerado.
+  if (!blob || streams.get(slot) !== s) return;
+  const lista = printsPorSlot.get(slot) ?? [];
+  lista.push(blob);
+  if (lista.length > PRINTS_POR_SLOT) lista.splice(0, lista.length - PRINTS_POR_SLOT);
+  printsPorSlot.set(slot, lista);
+}
+
+setInterval(() => {
+  // Aba oculta não desenha nada de novo: o print só repetiria o anterior.
+  if (document.visibilityState !== 'visible') return;
+  for (const [slot, s] of streams) {
+    // Transmissão própria não é denunciável, e sem quadro o print sai preto.
+    if (!s.started || s.userId === session?.user?.id) continue;
+    guardarPrint(slot, s).catch(() => {});
+  }
+}, PRINT_INTERVALO_MS);
+
+let denunciaSlot = null;
+let denunciaEnviando = false;
+let denunciaEnviada = false;
+let denunciaPrintAgora = null; // promessa do print tirado ao abrir o modal
+
+const categoriasDaDenuncia = () => document.querySelectorAll('input[name="reportCat"]');
+const categoriaDaDenuncia = () =>
+  document.querySelector('input[name="reportCat"]:checked')?.value ?? null;
+
+function atualizarDenuncia() {
+  const cat = categoriaDaDenuncia();
+  const obrigatorio = cat === 'outro';
+  $('reportNote').textContent =
+    cat === 'menores'
+      ? 'Nenhuma imagem será enviada. A moderação será avisada com urgência. Se houver risco imediato, denuncie também ao Discord e à SaferNet (denuncie.org.br).'
+      : 'Prints dos últimos segundos desta transmissão serão enviados à moderação.';
+  $('reportOpt').hidden = obrigatorio;
+  $('reportSend').disabled =
+    denunciaEnviando ||
+    denunciaEnviada ||
+    !cat ||
+    (obrigatorio && $('reportText').value.trim().length < DENUNCIA_OUTRO_MIN);
+}
+
+function abrirDenuncia(slot) {
+  denunciaSlot = slot;
+  denunciaEnviando = false;
+  denunciaEnviada = false;
+  for (const r of categoriasDaDenuncia()) {
+    r.checked = false;
+    r.disabled = false;
+  }
+  $('reportText').value = '';
+  $('reportText').disabled = false;
+  $('reportCancel').textContent = 'Cancelar';
+  $('reportSend').textContent = 'Enviar';
+  mostrarStatus($('reportStatus'), '');
+  atualizarDenuncia();
+  // Um print na hora, além dos do buffer. Fica fora dele, que guarda no máximo 3.
+  const s = streams.get(slot);
+  denunciaPrintAgora = s ? copiarCanvas(s.canvas).catch(() => null) : Promise.resolve(null);
+  openModal('reportModal');
+  categoriasDaDenuncia()[0].focus();
+}
+
+async function enviarDenuncia() {
+  if ($('reportSend').disabled) return;
+  const categoria = categoriaDaDenuncia();
+  denunciaEnviando = true;
+  for (const r of categoriasDaDenuncia()) r.disabled = true;
+  $('reportText').disabled = true;
+  $('reportSend').textContent = 'Enviando…';
+  mostrarStatus($('reportStatus'), '');
+  atualizarDenuncia();
+  try {
+    // Menores: nenhuma imagem sai do aparelho.
+    let prints = [];
+    if (categoria !== 'menores') {
+      const blobs = [...(printsPorSlot.get(denunciaSlot) ?? [])];
+      const agora = await denunciaPrintAgora;
+      if (agora) blobs.push(agora);
+      prints = await Promise.all(blobs.slice(-4).map(blobParaDataUrl));
+    }
+    await post(
+      `${P}/api/relatos/denuncia`,
+      {
+        token: tokenDaSala(),
+        slot: denunciaSlot,
+        categoria,
+        texto: $('reportText').value.trim(),
+        prints,
+      },
+      { retry: false },
+    );
+    denunciaEnviada = true;
+    mostrarStatus($('reportStatus'), 'Denúncia enviada. Obrigado.', { erro: false });
+    $('reportCancel').textContent = 'Fechar';
+  } catch (err) {
+    mostrarStatus($('reportStatus'), err.message);
+    for (const r of categoriasDaDenuncia()) r.disabled = false;
+    $('reportText').disabled = false;
+  } finally {
+    denunciaEnviando = false;
+    $('reportSend').textContent = 'Enviar';
+    atualizarDenuncia();
+  }
+}
+
+for (const r of categoriasDaDenuncia()) r.addEventListener('change', atualizarDenuncia);
+$('reportText').addEventListener('input', atualizarDenuncia);
+$('reportSend').addEventListener('click', enviarDenuncia);
+$('reportCancel').addEventListener('click', () => closeModal('reportModal'));
+$('reportModal').addEventListener('click', (e) => {
+  if (e.target === $('reportModal')) closeModal('reportModal');
+});
+
 $('copyDiagnostics').addEventListener('click', async () => {
   const resumo = {
     app: 'Sala de Tela',
@@ -3138,7 +3444,15 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
-  for (const id of ['qualityModal', 'profileModal', 'roomModal', 'joinModal', 'createModal']) {
+  for (const id of [
+    'qualityModal',
+    'bugModal',
+    'reportModal',
+    'profileModal',
+    'roomModal',
+    'joinModal',
+    'createModal',
+  ]) {
     if (!$(id).hidden) {
       if (id === 'qualityModal') fecharQualidade();
       else closeModal(id);

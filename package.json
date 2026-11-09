@@ -25,6 +25,7 @@
     "smoke:audio": "node scripts/smoke-native-audio.mjs",
     "smoke:admin": "node scripts/admin-smoke.mjs",
     "e2e:resiliencia": "node scripts/e2e-resiliencia.mjs",
+    "e2e:relatos": "node scripts/e2e-relatos.mjs",
     "diagnostico:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-bootstrap.ps1 -Diagnostico",
     "diagnostico:linux": "sh scripts/linux-bootstrap.sh --diagnostico",
     "diagnostico:macos": "sh scripts/macos-bootstrap.sh --diagnostico",

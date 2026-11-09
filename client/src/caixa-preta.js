@@ -16,7 +16,7 @@
  */
 
 const CHAVE = 'caixa-preta';
-const LIMITE = 50;
+const LIMITE = 200;
 
 export function createCaixaPreta({ storage, agora = () => Date.now(), limite = LIMITE } = {}) {
   let sessao = null;

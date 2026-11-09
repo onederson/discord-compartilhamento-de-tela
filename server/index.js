@@ -13,6 +13,8 @@ import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
 import { createNativeAudioBridge, packNativeAudio } from './native-audio.js';
 import { createNativeAudioAuthorizer, startNativeAudioLocalServer } from './native-audio-auth.js';
+import { criarBufferEventos, criarRelatos } from './relatos.js';
+import { criarRotasRelatos } from './relatos-rotas.js';
 import {
   createDiagnosticLogger,
   diagnosticoLigado,
@@ -23,9 +25,26 @@ import { servidoresPermitidos, permitirWeb } from '../scripts/env.mjs';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const diagnostico = createDiagnosticLogger({
+const diagnosticoEmDisco = createDiagnosticLogger({
   raiz: path.join(__dirname, '..'),
   habilitado: process.env.NODE_ENV !== 'test' && diagnosticoLigado(process.env.DIAGNOSTICO_LOCAL),
+});
+
+// Os últimos minutos do diagnóstico também ficam em memória, para o relato de
+// problema levar o que o servidor viu mesmo com o arquivo em disco desligado.
+const eventosRecentes = criarBufferEventos();
+const diagnostico = {
+  ...diagnosticoEmDisco,
+  log(evento, dados) {
+    eventosRecentes.registrar(evento, dados);
+    return diagnosticoEmDisco.log(evento, dados);
+  },
+};
+
+// Relatos, denúncias e bloqueios. RELATOS_DIR existe para os testes não
+// escreverem na .dados de verdade.
+const relatos = criarRelatos({
+  base: process.env.RELATOS_DIR || path.join(__dirname, '..', '.dados'),
 });
 
 // Pseudônimo estável da pessoa no diagnóstico: dá para seguir a mesma pessoa
@@ -231,6 +250,13 @@ if (ADMIN_ID) startSampling();
 
 const app = express();
 
+// Atrás do Caddy (ou de qualquer proxy na mesma máquina) toda conexão chega de
+// 127.0.0.1: sem isto, req.ip era o mesmo para todo mundo e os limites "por
+// IP" (login, relatos) viravam um limite global que uma só pessoa esgotava.
+// 'loopback' só confia no X-Forwarded-For quando quem fala com o Node é a
+// própria máquina; uma conexão direta da rede continua valendo pelo socket.
+app.set('trust proxy', 'loopback');
+
 // O proxy do Discord entrega as requisições da Activity sob o prefixo /.proxy.
 // Se ele chega até aqui, toda rota vira 404 e o cliente espera para sempre por
 // uma resposta que não vem — o sintoma é o "Está demorando…" do arranque, com
@@ -255,6 +281,20 @@ app.use((req, _res, next) => {
   }
   next();
 });
+
+// Antes do express.json() global: o limite dele (100kb) barraria o contexto de um
+// relato e os prints de uma denúncia. Cada rota de relato declara o próprio.
+const rotasRelatos = criarRotasRelatos({
+  relatos,
+  verifyToken,
+  salas: R,
+  eventos: eventosRecentes,
+  log: diagnostico.log,
+  pessoa,
+  requireAdmin,
+  publicOrigin: ORIGEM_EFETIVA,
+});
+app.use('/api/relatos', rotasRelatos.publicas);
 
 app.use(express.json());
 
@@ -1240,6 +1280,9 @@ app.get('/api/admin/diagnostico', requireAdmin, (req, res) => {
   res.type('application/x-ndjson').send(lerDiagnostico(diagnostico.arquivo, kb * 1024));
 });
 
+// Relatos e moderação. Depois do express.json() global: os corpos são pequenos.
+app.use('/api/admin', rotasRelatos.admin);
+
 app.get('/api/admin/metrics', requireAdmin, (_req, res) => {
   const dashboard = buildAdminDashboard({
     roomState: R.adminStats(),
@@ -1418,6 +1461,15 @@ function handleControl(ws, room, auth) {
 }
 
 function handleBroadcaster(ws, room, info, fonte, substituir = false) {
+  // Antes de ocupar slot: quem foi bloqueado pela moderação não chega a entrar
+  // na sala, e a aba mostra o motivo em vez de ficar tentando reconectar.
+  if (relatos.estaBloqueado(info.id)) {
+    diagnostico.log('moderacao.bloqueado-tentou', { sala: room.id, pessoa: pessoa(info.id) });
+    R.sendJson(ws, { type: 'error', message: 'Você está bloqueado de transmitir neste servidor.' });
+    ws.close();
+    return;
+  }
+
   const entry = R.attachBroadcaster(room, ws, info, fonte, substituir);
 
   if (typeof entry === 'string') {

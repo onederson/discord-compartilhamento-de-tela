@@ -8,9 +8,15 @@ vi.mock('@discord/embedded-app-sdk', () => ({
   DiscordSDK: class {},
 }));
 
+// Opções de cada player criado: os testes de print dão o "primeiro quadro" à mão.
+const jogadores = vi.hoisted(() => []);
+
 vi.mock('./player.js', () => ({
-  createPlayer: () => ({
-    start: () => true,
+  createPlayer: (_canvas, opcoes) => ({
+    start: () => {
+      jogadores.push(opcoes);
+      return true;
+    },
     stop: vi.fn(),
     push: vi.fn(),
     getLag: () => 24,
@@ -665,5 +671,177 @@ describe('diagnóstico enviado ao servidor', () => {
       fonte: 'tela',
       ausenteMs: 7000,
     });
+  });
+});
+
+describe('reportar problema e denunciar', () => {
+  let jpegs;
+
+  const chamadas = (caminho) =>
+    fetch.mock.calls.filter(
+      ([url]) => new URL(String(url), 'http://localhost').pathname === caminho,
+    );
+  const corpo = (caminho) => JSON.parse(chamadas(caminho).at(-1)[1].body);
+  const digitar = (id, texto) => {
+    const campo = document.getElementById(id);
+    campo.value = texto;
+    campo.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const escolher = (categoria) => {
+    const radio = document.querySelector(`input[name="reportCat"][value="${categoria}"]`);
+    radio.checked = true;
+    radio.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+
+  // O jsdom não desenha: o contexto e o JPEG são falsos, o fluxo é o de verdade.
+  beforeEach(() => {
+    jpegs = 0;
+    const canvas = dom.window.HTMLCanvasElement.prototype;
+    canvas.getContext = () => ({ drawImage: () => {} });
+    canvas.toBlob = (cb) => cb(new Blob([`jpeg-${jpegs++}`], { type: 'image/jpeg' }));
+    fetch.mockImplementation(
+      ((original) => async (url, init) => {
+        const pathname = new URL(String(url), 'http://localhost').pathname;
+        if (pathname === '/api/relatos/bug') return json({ ok: true, id: 'bug-1' });
+        if (pathname === '/api/relatos/denuncia') return json({ ok: true, id: 'den-1' });
+        return original(url, init);
+      })(fetch.getMockImplementation()),
+    );
+  });
+
+  async function assistir(opcoes) {
+    const socket = await entrar();
+    anunciar(socket, opcoes);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    // Primeiro quadro desenhado: sem ele não há o que copiar.
+    jogadores.at(-1).onTamanho();
+    return socket;
+  }
+
+  it('bloqueia o envio com menos de 10 caracteres e manda o contexto sem tokens', async () => {
+    await assistir();
+    await vi.advanceTimersByTimeAsync(1000);
+    document.getElementById('reportBug').click();
+    const modal = document.getElementById('bugModal');
+    expect(modal.hidden).toBe(false);
+    expect(document.activeElement).toBe(document.getElementById('bugText'));
+
+    digitar('bugText', 'curto');
+    expect(document.getElementById('bugSend').disabled).toBe(true);
+    digitar('bugText', 'a imagem congelou ao trocar de tela');
+    expect(document.getElementById('bugSend').disabled).toBe(false);
+
+    document.getElementById('bugSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bugStatus').textContent).toBe('Recebido! Código bug-1'),
+    );
+
+    const enviado = corpo('/api/relatos/bug');
+    expect(enviado).toMatchObject({
+      token: 'viewer-sala-a',
+      origem: 'atividade',
+      texto: 'a imagem congelou ao trocar de tela',
+    });
+    expect(enviado.contexto.streams).toEqual([
+      expect.objectContaining({
+        slot: 0,
+        fonte: 'tela',
+        config: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 },
+      }),
+    ]);
+    expect(enviado.contexto.connectionState).toBe('connected');
+    const semToken = JSON.stringify(enviado.contexto);
+    for (const privado of ['viewer-sala-a', 'guest-visitante', 'Ana', 'http://', 'identity']) {
+      expect(semToken).not.toContain(privado);
+    }
+
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(modal.hidden).toBe(true);
+  });
+
+  it('mostra a mensagem de erro do servidor no relato', async () => {
+    await assistir();
+    document.getElementById('reportBug').click();
+    digitar('bugText', 'a imagem congelou ao trocar de tela');
+    fetch.mockImplementationOnce(async () => json({ error: 'Limite de relatos.' }, 429));
+    document.getElementById('bugSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bugStatus').textContent).toBe('Limite de relatos.'),
+    );
+  });
+
+  it('não oferece denunciar a própria transmissão', async () => {
+    const socket = await entrar();
+    const eu = { id: 'guest-visitante', name: 'Visitante', broadcasting: true };
+    socket.message({ ...estado(), participants: [eu] });
+    socket.message({ type: 'stream-start', slot: 0, userId: eu.id, fonte: 'tela' });
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    expect(document.querySelector('.tile-stop')).not.toBeNull();
+    expect(document.querySelector('.tile-report')).toBeNull();
+  });
+
+  it('em Menores envia a denúncia sem nenhum print', async () => {
+    await assistir({ userId: 'bruno' });
+    await vi.advanceTimersByTimeAsync(11_000);
+    const botao = document.querySelector('.tile-report');
+    expect(botao.getAttribute('aria-label')).toBe('Denunciar transmissão');
+    botao.click();
+
+    expect(document.getElementById('reportModal').hidden).toBe(false);
+    expect(document.getElementById('reportNote').textContent).toBe(
+      'Prints dos últimos segundos desta transmissão serão enviados à moderação.',
+    );
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    escolher('menores');
+    expect(document.getElementById('reportNote').textContent).toContain(
+      'Nenhuma imagem será enviada.',
+    );
+    document.getElementById('reportSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('reportStatus').textContent).toBe(
+        'Denúncia enviada. Obrigado.',
+      ),
+    );
+    expect(corpo('/api/relatos/denuncia')).toMatchObject({
+      token: 'viewer-sala-a',
+      slot: 0,
+      categoria: 'menores',
+      prints: [],
+    });
+  });
+
+  it('exige texto em Outro', async () => {
+    await assistir({ userId: 'bruno' });
+    document.querySelector('.tile-report').click();
+    escolher('outro');
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    digitar('reportText', 'abc');
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    digitar('reportText', 'conteúdo suspeito');
+    expect(document.getElementById('reportSend').disabled).toBe(false);
+  });
+
+  it('guarda no máximo 3 prints por slot, ignora a aba oculta e soma um print na hora', async () => {
+    await assistir({ userId: 'bruno' });
+    await vi.advanceTimersByTimeAsync(5_000 * 8);
+    expect(jpegs).toBe(8);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    await vi.advanceTimersByTimeAsync(5_000 * 4);
+    expect(jpegs).toBe(8);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+
+    document.querySelector('.tile-report').click();
+    escolher('odio');
+    document.getElementById('reportSend').click();
+    await vi.waitFor(() => expect(chamadas('/api/relatos/denuncia')).toHaveLength(1));
+    // 3 do buffer (os mais recentes) e 1 tirado ao abrir o modal.
+    const { prints } = corpo('/api/relatos/denuncia');
+    expect(prints).toHaveLength(4);
+    for (const p of prints) expect(p).toMatch(/^data:image\/jpeg;base64,/);
+    const textos = prints.map((p) => Buffer.from(p.split(',')[1], 'base64').toString());
+    expect(textos).toEqual(['jpeg-5', 'jpeg-6', 'jpeg-7', 'jpeg-8']);
   });
 });

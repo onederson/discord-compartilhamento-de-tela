@@ -153,6 +153,64 @@
             <dl id="envList" class="dl"></dl>
           </section>
         </div>
+
+        <section class="card panel" id="relatos" aria-labelledby="relatosTitle">
+          <div class="panel-head">
+            <h2 id="relatosTitle">Relatos</h2>
+            <span id="relatosCount" class="badge">0</span>
+            <div class="spacer"></div>
+            <div class="filtros" role="group" aria-label="Filtrar relatos">
+              <button class="chip" type="button" data-filtro="tipo" data-valor="bug">Bugs</button>
+              <button class="chip" type="button" data-filtro="tipo" data-valor="denuncia">Denúncias</button>
+              <span class="filtros-sep" aria-hidden="true"></span>
+              <button class="chip" type="button" data-filtro="status" data-valor="aberto">Abertos</button>
+              <button class="chip" type="button" data-filtro="status" data-valor="resolvido">Resolvidos</button>
+            </div>
+          </div>
+
+          <p id="relatosEmpty" class="empty">Nenhum relato com esses filtros.</p>
+
+          <div id="relatosScroll" class="table-scroll" hidden>
+            <table class="clicavel">
+              <thead>
+                <tr>
+                  <th>Data</th>
+                  <th>Tipo</th>
+                  <th>Categoria</th>
+                  <th>Texto</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="relatosRows"></tbody>
+            </table>
+          </div>
+
+          <div id="relatoDetalhe" class="detalhe" hidden></div>
+        </section>
+
+        <section class="card panel" aria-labelledby="bloqueiosTitle">
+          <div class="panel-head">
+            <h2 id="bloqueiosTitle">Bloqueios</h2>
+            <div class="spacer"></div>
+            <span id="bloqueiosCount" class="badge">0</span>
+          </div>
+
+          <p id="bloqueiosEmpty" class="empty">Ninguém bloqueado.</p>
+
+          <div id="bloqueiosScroll" class="table-scroll" hidden>
+            <table>
+              <thead>
+                <tr>
+                  <th>Pessoa</th>
+                  <th>Motivo</th>
+                  <th>Bloqueado por</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="bloqueiosRows"></tbody>
+            </table>
+          </div>
+        </section>
       </div>
     </div>
 

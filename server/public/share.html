@@ -17,7 +17,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=54" />
+    <link rel="stylesheet" href="/share.css?v=55" />
   </head>
   <body>
     <div class="apple-shell">
@@ -406,7 +406,25 @@
           transmissão continua.
         </p>
         <p class="credits">Modificações por Onederson</p>
+        <button id="bug-open" type="button" class="secondary report-link" aria-label="Reportar problema">Reportar problema</button>
       </footer>
+    </div>
+
+    <div id="bug-modal" class="share-modal" hidden>
+      <div class="share-modal-card" role="dialog" aria-modal="true" aria-labelledby="bug-title">
+        <h2 id="bug-title">Reportar problema</h2>
+        <p class="share-modal-sub">
+          Vamos anexar automaticamente o registro técnico dos últimos minutos (sem senhas nem tokens).
+        </p>
+        <label class="share-field" for="bug-text">O que aconteceu?</label>
+        <textarea id="bug-text" rows="5" maxlength="2000" aria-describedby="bug-count"></textarea>
+        <p id="bug-count" class="share-modal-count">0 / 2000 · mínimo de 10 caracteres</p>
+        <p id="bug-status" class="status" role="status"></p>
+        <div class="share-modal-actions">
+          <button id="bug-cancel" type="button" class="secondary" aria-label="Cancelar">Cancelar</button>
+          <button id="bug-send" type="button" class="primary" aria-label="Enviar relato" disabled>Enviar</button>
+        </div>
+      </div>
     </div>
 
     <!-- Script de Gestão do Tema (Light / Dark) -->
@@ -453,6 +471,6 @@
       })();
     </script>
 
-    <script type="module" src="/share.js?v=55"></script>
+    <script type="module" src="/share.js?v=56"></script>
   </body>
 </html>

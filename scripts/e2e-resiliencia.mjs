@@ -153,6 +153,9 @@ async function subirServidor() {
 
 // ------------------------------------------------------------- imagem viva
 
+// Amostras seguidas (de 500ms) com imagem diferente para contar como volta.
+const MUDANCAS_PARA_VOLTAR = 4;
+
 /** Amostra um hash do canvas do stream a cada 500ms e guarda quando mudou. */
 function monitorarImagem(pagina) {
   const estado = {
@@ -161,6 +164,11 @@ function monitorarImagem(pagina) {
     parado: false,
     paradoDesde: null,
     voltouEm: null,
+    // Mudanças seguidas desde que parou. Uma mudança solta (canvas limpo,
+    // redimensionado, um quadro velho que chegou atrasado) não é imagem viva:
+    // contou como volta falsa num cenário em que a conexão seguia congelada.
+    sequencia: 0,
+    inicioSequencia: null,
   };
   const timer = setInterval(async () => {
     let hash = null;
@@ -188,13 +196,20 @@ function monitorarImagem(pagina) {
       estado.ultimoHash = hash;
       estado.ultimaMudanca = agora;
       if (estado.parado) {
+        if (estado.sequencia === 0) estado.inicioSequencia = agora;
+        estado.sequencia++;
+      }
+      if (estado.parado && estado.sequencia >= MUDANCAS_PARA_VOLTAR) {
         estado.parado = false;
-        estado.voltouEm = agora;
+        estado.sequencia = 0;
+        estado.voltouEm = estado.inicioSequencia;
         log(
           'imagem',
           `VOLTOU (parada desde +${((estado.paradoDesde - t0Global) / 1000).toFixed(1)}s)`,
         );
       }
+    } else if (estado.parado) {
+      estado.sequencia = 0;
     } else if (
       !estado.parado &&
       estado.ultimaMudanca &&
@@ -208,7 +223,10 @@ function monitorarImagem(pagina) {
   }, 500);
   return {
     estado,
-    viva: () => estado.ultimaMudanca > 0 && Date.now() - estado.ultimaMudanca <= JANELA_VIVA_MS,
+    viva: () =>
+      !estado.parado &&
+      estado.ultimaMudanca > 0 &&
+      Date.now() - estado.ultimaMudanca <= JANELA_VIVA_MS,
     parar: () => clearInterval(timer),
   };
 }

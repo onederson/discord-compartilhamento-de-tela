@@ -235,3 +235,70 @@ describe('conexão de controle', () => {
     });
   });
 });
+
+describe('reportar problema', () => {
+  const digitar = (texto) => {
+    const campo = document.getElementById('bug-text');
+    campo.value = texto;
+    campo.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const chamadaDoRelato = () => fetch.mock.calls.find(([url]) => url === '/api/relatos/bug');
+
+  it('abre com foco no campo, exige 10 caracteres e fecha com Esc', () => {
+    const modal = document.getElementById('bug-modal');
+    expect(modal.hidden).toBe(true);
+    document.getElementById('bug-open').click();
+    expect(modal.hidden).toBe(false);
+    expect(document.activeElement).toBe(document.getElementById('bug-text'));
+    expect(document.getElementById('bug-send').disabled).toBe(true);
+    digitar('curto');
+    expect(document.getElementById('bug-send').disabled).toBe(true);
+    digitar('um texto com mais de dez');
+    expect(document.getElementById('bug-send').disabled).toBe(false);
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(modal.hidden).toBe(true);
+  });
+
+  it('envia com origem captura, o token da página e o contexto, sem espectadores', async () => {
+    document.getElementById('tela-start').click();
+    await vi.waitFor(() => expect(document.getElementById('tela-live').hidden).toBe(false));
+    const { options } = capture.instances[0];
+    options.onAviso('A captura travou por um instante');
+    options.onStats({ viewers: 1, fps: 60, mbps: 4.5, watchers: [{ id: 'x', name: 'Segredo' }] });
+    fetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, id: 'ab12' }) });
+
+    document.getElementById('bug-open').click();
+    digitar('A imagem congelou depois de trocar de janela');
+    document.getElementById('bug-send').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bug-status').textContent).toBe('Recebido! Código ab12'),
+    );
+
+    const corpo = JSON.parse(chamadaDoRelato()[1].body);
+    expect(corpo.origem).toBe('captura');
+    expect(corpo.token).toContain('.assinatura');
+    expect(corpo.texto).toBe('A imagem congelou depois de trocar de janela');
+    expect(corpo.contexto.controle).toBe('Conectando à sala');
+    expect(corpo.contexto.fontesAtivas).toEqual(['tela']);
+    expect(corpo.contexto.avisos).toEqual([
+      expect.objectContaining({ fonte: 'tela', msg: 'A captura travou por um instante' }),
+    ]);
+    expect(corpo.contexto.stats.tela).toMatchObject({ viewers: 1, fps: 60 });
+    expect(JSON.stringify(corpo.contexto)).not.toContain('Segredo');
+  });
+
+  it('mostra a mensagem de erro do servidor e permite tentar de novo', async () => {
+    fetch.mockResolvedValue({
+      ok: false,
+      status: 429,
+      json: async () => ({ error: 'Muitos relatos.' }),
+    });
+    document.getElementById('bug-open').click();
+    digitar('um texto com mais de dez');
+    document.getElementById('bug-send').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bug-status').textContent).toBe('Muitos relatos.'),
+    );
+    expect(document.getElementById('bug-send').disabled).toBe(false);
+  });
+});

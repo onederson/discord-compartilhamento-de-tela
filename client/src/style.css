@@ -99,7 +99,9 @@ body {
   border: 1px solid var(--line);
   backdrop-filter: blur(25px);
   -webkit-backdrop-filter: blur(25px);
-  transition: border-color 0.2s var(--apple-ease), transform 0.2s var(--apple-ease);
+  transition:
+    border-color 0.2s var(--apple-ease),
+    transform 0.2s var(--apple-ease);
 }
 
 /* Quem está transmitindo fica com o fundo preto, sem moldura: a borda verde
@@ -273,7 +275,9 @@ body {
   border-radius: 14px;
   background: var(--tile);
   border: 1px solid var(--line);
-  transition: border-color 0.2s var(--apple-ease), transform 0.2s var(--apple-ease);
+  transition:
+    border-color 0.2s var(--apple-ease),
+    transform 0.2s var(--apple-ease);
 }
 
 .sidebar-people .tile:hover {
@@ -345,7 +349,11 @@ body {
 /* --------------------------------------------------- convite para assistir */
 
 .tile.sharing:has(.watch-prompt) {
-  background: radial-gradient(circle at center, rgba(30, 30, 36, 0.7) 0%, rgba(8, 8, 10, 0.95) 100%);
+  background: radial-gradient(
+    circle at center,
+    rgba(30, 30, 36, 0.7) 0%,
+    rgba(8, 8, 10, 0.95) 100%
+  );
 }
 
 .watch-prompt {
@@ -412,6 +420,46 @@ body {
 
 .tile:hover .tile-stop {
   opacity: 1;
+}
+
+/* Ao lado do botão de parar, com o mesmo comportamento de aparecer ao pousar. */
+.tile-report {
+  position: absolute;
+  right: 44px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  opacity: 0;
+  transition:
+    opacity 0.15s,
+    background 0.15s;
+}
+
+.tile:hover .tile-report,
+.tile-report:focus-visible {
+  opacity: 1;
+}
+
+.tile-report:hover {
+  background: var(--danger);
+}
+
+.tile-report svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tile-stop:hover {
@@ -529,7 +577,9 @@ body {
   color: var(--text);
   font: 500 13px/1.2 inherit;
   text-align: left;
-  transition: background 0.15s, color 0.15s;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .tile-menu button:hover {
@@ -775,7 +825,9 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 16px 36px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
 
 .empty-display-icon {
@@ -993,7 +1045,9 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(28px);
   -webkit-backdrop-filter: blur(28px);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 16px 40px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 /* Grupo sem nenhum botão visível vira uma bolha escura solta na tela */
@@ -1167,10 +1221,16 @@ button {
   background: currentColor;
 }
 
-.connection-pill[data-state='connected'] { color: #6ee7a0; }
+.connection-pill[data-state='connected'] {
+  color: #6ee7a0;
+}
 .connection-pill[data-state='connecting'],
-.connection-pill[data-state='reconnecting'] { color: #f2d58a; }
-.connection-pill[data-state='offline'] { color: #ff9f9a; }
+.connection-pill[data-state='reconnecting'] {
+  color: #f2d58a;
+}
+.connection-pill[data-state='offline'] {
+  color: #ff9f9a;
+}
 
 #app.flutua.detalhes .topbar,
 #app.flutua.detalhes .bottombar,
@@ -1239,12 +1299,31 @@ button {
   cursor: pointer;
 }
 
-.panel-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.panel-note, .panel-advanced { color: var(--muted); font-size: 12px; line-height: 1.5; }
-.panel-note { margin: 10px 0 0; }
-.panel-advanced { margin-top: 16px; }
-.panel-advanced summary { cursor: pointer; padding: 4px 0; }
-.panel-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.panel-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.panel-note,
+.panel-advanced {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.panel-note {
+  margin: 10px 0 0;
+}
+.panel-advanced {
+  margin-top: 16px;
+}
+.panel-advanced summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+.panel-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 .diagnostic-text {
   width: 100%;
@@ -1256,7 +1335,10 @@ button {
   border-radius: 10px;
   background: #0c0d10;
   color: var(--text);
-  font: 12px/1.5 ui-monospace, Consolas, monospace;
+  font:
+    12px/1.5 ui-monospace,
+    Consolas,
+    monospace;
 }
 
 .panel-row {
@@ -1318,7 +1400,9 @@ button {
   -webkit-backdrop-filter: blur(16px);
   color: var(--text);
   font: 600 13.5px/1 inherit;
-  transition: background 0.2s var(--apple-ease), border-color 0.2s var(--apple-ease);
+  transition:
+    background 0.2s var(--apple-ease),
+    border-color 0.2s var(--apple-ease);
 }
 
 .user-chip:hover {
@@ -1358,8 +1442,12 @@ button {
   margin-bottom: 22px;
 }
 
-.lobby-head { flex-wrap: wrap; }
-.lobby-actions { flex-wrap: wrap; }
+.lobby-head {
+  flex-wrap: wrap;
+}
+.lobby-actions {
+  flex-wrap: wrap;
+}
 .lobby-eyebrow {
   display: flex;
   align-items: center;
@@ -1511,7 +1599,8 @@ button {
   color: var(--muted);
 }
 
-.field-col input {
+.field-col input,
+.field-col textarea {
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
@@ -1519,13 +1608,61 @@ button {
   border-radius: 12px;
   font: inherit;
   font-size: 13.5px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
-.field-col input:focus {
+.field-col input:focus,
+.field-col textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.3);
+}
+
+.field-col textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+
+.modal-count {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.modal-ok {
+  color: #9be3b0;
+}
+
+.report-cats {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.report-legend {
+  padding: 0;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 13.5px;
+}
+
+.report-cat {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.report-cat:hover {
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ------------------------------------------------------------------- modal */
@@ -1552,7 +1689,9 @@ button {
   border: 1px solid rgba(255, 255, 255, 0.12);
   backdrop-filter: blur(35px);
   -webkit-backdrop-filter: blur(35px);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.7),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .modal-card h2 {
@@ -1590,7 +1729,9 @@ button {
   border-radius: 12px;
   font: inherit;
   font-size: 13.5px;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .field select:focus {
@@ -1650,7 +1791,9 @@ button {
 .quality-option.active {
   border-color: var(--accent);
   background: rgba(0, 113, 227, 0.12);
-  box-shadow: 0 0 0 1px var(--accent), 0 6px 20px rgba(0, 113, 227, 0.3);
+  box-shadow:
+    0 0 0 1px var(--accent),
+    0 6px 20px rgba(0, 113, 227, 0.3);
 }
 
 .quality-option strong,

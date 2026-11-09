@@ -495,6 +495,206 @@ td:last-child {
   font-size: 12px;
 }
 
+/* ------------------------------------------------------------------ relatos */
+
+.filtros {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.filtros-sep {
+  width: 1px;
+  height: 18px;
+  margin: 0 4px;
+  background: var(--border-strong);
+}
+
+.chip {
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.chip:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.chip.ativo {
+  border-color: color-mix(in srgb, var(--brand) 55%, transparent);
+  background: color-mix(in srgb, var(--brand) 16%, transparent);
+  color: var(--fg);
+}
+
+.badge.warn {
+  border-color: color-mix(in srgb, var(--warn) 35%, transparent);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warn);
+}
+
+.badge.urgente-selo {
+  border-color: transparent;
+  background: var(--danger);
+  color: #fff;
+  font-weight: 600;
+}
+
+/* A linha clicável tem que parecer clicável, e a urgente não pode passar
+   despercebida no meio da fila. */
+#relatosRows tr {
+  cursor: pointer;
+}
+
+#relatosRows tr:hover td,
+#relatosRows tr.ativa td {
+  background: var(--card-hover);
+}
+
+#relatosRows tr.urgente td {
+  background: color-mix(in srgb, var(--danger) 10%, transparent);
+}
+
+#relatosRows td.previa {
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.detalhe {
+  display: grid;
+  padding: var(--pad);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+
+.relato {
+  display: grid;
+  gap: 14px;
+}
+
+.relato.urgente {
+  outline: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  outline-offset: 12px;
+  border-radius: var(--radius-sm);
+}
+
+.relato h3 {
+  font-size: 15px;
+  font-weight: 500;
+}
+
+.relato-texto {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dl-largo dd {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+}
+
+.prints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.prints img {
+  display: block;
+  max-width: 280px;
+  max-height: 180px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+
+.relato summary {
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.relato pre.json {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 12px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.linha-do-tempo {
+  display: grid;
+  gap: 4px;
+  max-height: 260px;
+  margin: 8px 0 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+  font-size: 12px;
+}
+
+.linha-do-tempo li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.linha-do-tempo time {
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.linha-do-tempo code {
+  font-family: var(--mono);
+}
+
+.aviso-ok {
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, var(--ok) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--ok) 10%, transparent);
+  color: var(--ok);
+  font-size: 13px;
+}
+
+.acoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn-perigo {
+  border-color: color-mix(in srgb, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+
+.btn-perigo:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: var(--danger);
+}
+
+.btn-brand-suave {
+  border-color: color-mix(in srgb, var(--brand) 50%, transparent);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 @media (max-width: 640px) {
   .shell,
   .topbar {

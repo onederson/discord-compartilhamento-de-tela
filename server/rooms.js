@@ -350,6 +350,9 @@ export function createRoom({
 
 export const getRoom = (id) => rooms.get(id) ?? null;
 
+/** Todas as salas abertas. A moderação precisa achar a pessoa onde quer que ela transmita. */
+export const salasAbertas = () => [...rooms.values()];
+
 /**
  * A sala fixa de uma call: id derivado do canal, criada na primeira entrada.
  *

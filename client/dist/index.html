@@ -4,8 +4,8 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Sala de Tela</title>
-    <script type="module" crossorigin src="/assets/index-CbSG9nbz.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-DgcURprs.css">
+    <script type="module" crossorigin src="/assets/index-B-IVQcm0.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BoNhSQko.css">
   </head>
   <body>
     <div id="app">
@@ -132,6 +132,7 @@
           <div class="panel-actions">
             <button id="recoverStreams" class="panel-btn" type="button" disabled>Recuperar imagem</button>
             <button id="copyDiagnostics" class="panel-btn" type="button">Copiar diagnóstico</button>
+            <button id="reportBugPanel" class="panel-btn" type="button" aria-label="Reportar problema">Reportar problema</button>
           </div>
           <p class="panel-note">O resumo contém só dados técnicos, sem nomes, tokens ou links.</p>
           <textarea id="diagnosticText" class="diagnostic-text" readonly spellcheck="false" aria-label="Resumo técnico para copiar" hidden></textarea>
@@ -246,6 +247,18 @@
 
           <div class="group">
             <button
+              id="reportBug"
+              class="btn"
+              data-tip="Reportar problema"
+              aria-label="Reportar problema"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7.5v5.5M12 16.5v.01" />
+              </svg>
+            </button>
+            <button
               id="roomSettings"
               class="btn"
               data-tip="Senha da sala"
@@ -327,6 +340,61 @@
           <div class="modal-actions">
             <button id="qualityCancel" class="btn" hidden>Cancelar</button>
             <button id="qualityClose" class="btn go">Concluir</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="bugModal" class="modal" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="bugTitle">
+          <h2 id="bugTitle">Reportar problema</h2>
+          <p class="modal-sub">
+            Vamos anexar automaticamente o registro técnico dos últimos minutos (sem senhas nem
+            tokens).
+          </p>
+
+          <label class="field-col">
+            <span>O que aconteceu?</span>
+            <textarea id="bugText" rows="5" maxlength="2000" aria-describedby="bugCount"></textarea>
+          </label>
+          <p id="bugCount" class="modal-count">0 / 2000 · mínimo de 10 caracteres</p>
+
+          <p id="bugStatus" class="modal-error" role="status" hidden></p>
+
+          <div class="modal-actions">
+            <button id="bugCancel" class="btn" aria-label="Cancelar">Cancelar</button>
+            <button id="bugSend" class="btn go" aria-label="Enviar relato" disabled>Enviar</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="reportModal" class="modal" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reportTitle">
+          <h2 id="reportTitle">Denunciar transmissão</h2>
+          <p id="reportNote" class="modal-sub"></p>
+
+          <fieldset class="report-cats">
+            <legend class="report-legend">Motivo</legend>
+            <label class="report-cat"><input type="radio" name="reportCat" value="sexual" /><span>Nudez ou conteúdo sexual</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="violencia" /><span>Violência ou conteúdo chocante</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="odio" /><span>Ódio, assédio ou bullying</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="menores" /><span>Exploração ou risco a menores</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="ilegal" /><span>Conteúdo ilegal ou perigoso</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="golpe" /><span>Golpe, spam ou fraude</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="pirataria" /><span>Pirataria ou direitos autorais</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="dados" /><span>Exposição de dados pessoais</span></label>
+            <label class="report-cat"><input type="radio" name="reportCat" value="outro" /><span>Outro</span></label>
+          </fieldset>
+
+          <label class="field-col field-gap">
+            <span>Detalhes <em id="reportOpt" class="opt">(opcional)</em></span>
+            <textarea id="reportText" rows="3" maxlength="1000"></textarea>
+          </label>
+
+          <p id="reportStatus" class="modal-error" role="status" hidden></p>
+
+          <div class="modal-actions">
+            <button id="reportCancel" class="btn" aria-label="Cancelar">Cancelar</button>
+            <button id="reportSend" class="btn go" aria-label="Enviar denúncia" disabled>Enviar</button>
           </div>
         </div>
       </div>

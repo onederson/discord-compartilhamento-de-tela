@@ -6,7 +6,8 @@ const MAX_BYTES = 5_000_000;
 // do dia justamente quando a análise acontece, no fim dele.
 const ARQUIVOS_ANTIGOS = 3;
 const MAX_UPLOAD_BYTES = 128_000;
-const SENSITIVE_KEY = /token|secret|password|senha|cookie|authorization|identity|proof|credential/i;
+export const SENSITIVE_KEY =
+  /token|secret|password|senha|cookie|authorization|identity|proof|credential/i;
 
 export function diagnosticoLigado(valor = '1') {
   return !/^(0|false|off|desligado|nao|não)$/i.test(String(valor).trim());
