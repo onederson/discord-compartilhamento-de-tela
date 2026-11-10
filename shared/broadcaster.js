@@ -216,6 +216,57 @@ export function fonteIndisponivel(fonte) {
     : 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
 }
 
+export const CAPTURA_PARADA_MS = 15_000;
+export const AVISO_TRAVAMENTO_INTERVALO_MS = 5 * 60_000;
+
+let cacheFabricanteGpu = null;
+
+export function _limparCacheGpu() {
+  cacheFabricanteGpu = null;
+}
+
+export function detectarFabricanteGpu() {
+  if (cacheFabricanteGpu !== null) return cacheFabricanteGpu;
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl || typeof gl.getParameter !== 'function') {
+      cacheFabricanteGpu = 'desconhecido';
+      return cacheFabricanteGpu;
+    }
+    const ext =
+      typeof gl.getExtension === 'function' ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : null;
+    let renderer = param && typeof gl.getParameter === 'function' ? gl.getParameter(param) : null;
+    if (!renderer && typeof gl.getParameter === 'function') {
+      renderer = gl.getParameter(gl.RENDERER ?? 0x1f01);
+    }
+    const str = String(renderer ?? '');
+    if (/nvidia|geforce|quadro|rtx|gtx/i.test(str)) {
+      cacheFabricanteGpu = 'nvidia';
+    } else if (/amd|radeon|\bati\b/i.test(str)) {
+      cacheFabricanteGpu = 'amd';
+    } else if (/intel/i.test(str)) {
+      cacheFabricanteGpu = 'intel';
+    } else {
+      cacheFabricanteGpu = 'desconhecido';
+    }
+  } catch {
+    cacheFabricanteGpu = 'desconhecido';
+  }
+  return cacheFabricanteGpu;
+}
+
+export function mensagemTravamento(fabricante) {
+  if (fabricante === 'nvidia') {
+    return 'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.';
+  }
+  if (fabricante === 'amd') {
+    return 'A captura travou: o jogo parou de entregar quadros. Placa AMD: rode o jogo em "Janela sem bordas" (borderless) em vez de tela cheia exclusiva. Se continuar, desligue o Radeon Anti-Lag e o Radeon Chill para esse jogo no AMD Software.';
+  }
+  return 'A captura travou: o jogo parou de entregar quadros. Rode o jogo em "Janela sem bordas" (borderless) em vez de tela cheia exclusiva e reabra a transmissão.';
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.wsUrl        endpoint do relay, com o token de transmissor
@@ -266,6 +317,7 @@ export function createBroadcaster({
   let ultimoQuadroAt = 0;
   let idleTimer = null;
   let avisoTravamentoAtivo = false;
+  let ultimoAvisoTravamentoAt = 0;
 
   let running = false;
   // Null até o servidor atribuir de fato. Usar 0 como provisório fazia o
@@ -902,6 +954,17 @@ export function createBroadcaster({
 
   // ------------------------------------------------------------------ captura
 
+  function dispararAvisoTravamento() {
+    if (!running) return;
+    if (displaySurface === 'window' || capturedFrames > 10) return;
+    const now = Date.now();
+    if (now - ultimoAvisoTravamentoAt < AVISO_TRAVAMENTO_INTERVALO_MS) return;
+    ultimoAvisoTravamentoAt = now;
+    avisoTravamentoAtivo = true;
+    onAviso?.(mensagemTravamento(detectarFabricanteGpu()));
+    console.error('Captura de vídeo parou de emitir quadros.');
+  }
+
   function pump(track) {
     if (window.MediaStreamTrackProcessor) pumpDirect(track);
     else pumpViaVideo();
@@ -911,21 +974,13 @@ export function createBroadcaster({
   async function pumpDirect(track) {
     reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     let frameTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      if (displaySurface === 'window' || capturedFrames > 10) return;
-      avisoTravamentoAtivo = true;
-      onAviso?.(
-        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
-      );
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
+    const alertStuck = () => dispararAvisoTravamento();
 
     while (running) {
       let frame;
       try {
         clearTimeout(frameTimeout);
-        frameTimeout = setTimeout(alertStuck, 5000);
+        frameTimeout = setTimeout(alertStuck, CAPTURA_PARADA_MS);
 
         const { done, value } = await reader.read();
 
@@ -979,20 +1034,12 @@ export function createBroadcaster({
     };
 
     let tickTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      if (displaySurface === 'window' || capturedFrames > 10) return;
-      avisoTravamentoAtivo = true;
-      onAviso?.(
-        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
-      );
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
+    const alertStuck = () => dispararAvisoTravamento();
 
     const tick = () => {
       if (!running) return;
       clearTimeout(tickTimeout);
-      tickTimeout = setTimeout(alertStuck, 5000);
+      tickTimeout = setTimeout(alertStuck, CAPTURA_PARADA_MS);
 
       if (video.paused) video.play()?.catch?.(() => {});
       if (video.readyState < 2 || !video.videoWidth) return rescheduleFallback();
@@ -1897,5 +1944,6 @@ export function createBroadcaster({
     somBloqueado: () => somBloqueado,
     isRunning: () => running,
     diagnosticar,
+    fabricanteGpu: () => detectarFabricanteGpu(),
   };
 }

@@ -939,16 +939,33 @@ export function pushChunk(room, entry, chunk) {
       sentCopies++;
       v.__mediaBytesOut = (v.__mediaBytesOut ?? 0) + bytes;
       v.__primed.add(entry.slot);
+      v.__atrasado?.delete(entry.slot);
       continue;
     }
 
-    if (!v.__primed.has(entry.slot)) continue;
+    if (!v.__primed.has(entry.slot)) {
+      // Ficou para trás por fila cheia: até o próximo keyframe periódico ele
+      // segue contando como descarte, para o aviso de congestionamento ao
+      // transmissor continuar enxergando que este espectador não acompanha.
+      if (v.__atrasado?.has(entry.slot)) {
+        eligibleCopies++;
+        droppedCopies++;
+      }
+      continue;
+    }
     eligibleCopies++;
 
     if (v.bufferedAmount > MAX_BUFFERED_BYTES) {
       room.droppedChunks++;
       entry.droppedChunks++;
       droppedCopies++;
+      // Um delta perdido quebra a cadeia de referência: os seguintes só
+      // decodificariam como imagem corrompida ou erro. Este espectador para de
+      // receber deltas e retoma no próximo keyframe periódico, que o
+      // transmissor já emite a cada poucos segundos. Ninguém pede keyframe
+      // forçado, então quem acompanha bem não paga nada por isso.
+      v.__primed.delete(entry.slot);
+      (v.__atrasado ??= new Set()).add(entry.slot);
       continue;
     }
     v.send(chunk);
@@ -989,6 +1006,7 @@ export function stopStream(room, entry) {
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
     v.__watching?.delete(entry.slot);
+    v.__atrasado?.delete(entry.slot);
   }
   toViewers(room, { type: 'stream-stop', slot: entry.slot });
 }

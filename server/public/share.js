@@ -19,7 +19,7 @@ import {
   fonteIndisponivel,
   opcoesTela,
   pedirDisplayMedia,
-} from '/shared/broadcaster.js?v=15';
+} from '/shared/broadcaster.js?v=16';
 
 const $ = (id) => document.getElementById(id);
 
@@ -806,7 +806,10 @@ function criarPainel(fonte) {
           return;
         }
         if (msg.startsWith('A captura travou'))
-          broadcaster?.diagnosticar?.('tx-captura-travou', { fonte });
+          broadcaster?.diagnosticar?.('tx-captura-travou', {
+            fonte,
+            gpu: broadcaster?.fabricanteGpu?.() ?? 'desconhecido',
+          });
         if (msg === 'Áudio isolado do Firefox ligado.') {
           $('somAba').textContent = 'Reiniciar áudio do Firefox';
           setStatus(msg, 'ok');

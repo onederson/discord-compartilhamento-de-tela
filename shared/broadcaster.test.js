@@ -11,8 +11,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  _limparCacheGpu,
   createBroadcaster,
+  detectarFabricanteGpu,
   fonteIndisponivel,
+  mensagemTravamento,
   opcoesTela,
   pedirDisplayMedia,
   supportError,
@@ -338,6 +341,7 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  _limparCacheGpu();
   encoders = [];
   audioEncoders = [];
   sockets = [];
@@ -359,6 +363,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _limparCacheGpu();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -1065,10 +1070,43 @@ describe('quadros', () => {
       processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
       await vi.advanceTimersByTimeAsync(0);
 
-      // Espera 6 segundos sem nenhum novo quadro chegar (simulando Alt-Tab)
-      await vi.advanceTimersByTimeAsync(6000);
+      // Espera 16 segundos sem nenhum novo quadro chegar (simulando Alt-Tab)
+      await vi.advanceTimersByTimeAsync(16_000);
 
       expect(onAviso).not.toHaveBeenCalledWith(expect.stringMatching(/driver de vídeo parou/));
+      b.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('depois do primeiro aviso, uma nova parada dentro de 5 min não gera um segundo aviso de captura travada', async () => {
+    const onAviso = vi.fn();
+    const stream = telaSimples({ width: 1280, height: 720, displaySurface: 'monitor' });
+    const { b } = await noAr({ onAviso }, stream);
+
+    vi.useFakeTimers();
+    try {
+      processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Espera 15 segundos sem novos quadros: primeiro aviso dispara
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/^A captura travou/));
+      expect(onAviso).toHaveBeenCalledTimes(1);
+
+      // Chega um novo quadro: limpa o aviso
+      processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onAviso).toHaveBeenLastCalledWith(null);
+
+      // Nova parada de 15 segundos em menos de 5 minutos do primeiro aviso
+      await vi.advanceTimersByTimeAsync(15_000);
+      const chamadasTravamento = onAviso.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.startsWith('A captura travou'),
+      );
+      expect(chamadasTravamento).toHaveLength(1);
+
       b.stop();
     } finally {
       vi.useRealTimers();
@@ -1711,5 +1749,64 @@ describe('diagnóstico do transmissor', () => {
 
     expect(diagnosticos(ws, 'tx-captura-fim')).toHaveLength(1);
     expect(b.isRunning()).toBe(false);
+  });
+});
+
+describe('mensagemTravamento', () => {
+  it('gera mensagens com prefixo obrigatório e orientações por fabricante', () => {
+    const amd = mensagemTravamento('amd');
+    expect(amd.startsWith('A captura travou')).toBe(true);
+    expect(amd).toContain('AMD');
+
+    const nvidia = mensagemTravamento('nvidia');
+    expect(nvidia.startsWith('A captura travou')).toBe(true);
+    expect(nvidia).toContain('NVIDIA');
+
+    const desc = mensagemTravamento('desconhecido');
+    expect(desc.startsWith('A captura travou')).toBe(true);
+    expect(desc).not.toContain('NVIDIA');
+  });
+});
+
+describe('detectarFabricanteGpu', () => {
+  it('devolve desconhecido quando getContext devolve null', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    expect(detectarFabricanteGpu()).toBe('desconhecido');
+  });
+
+  it('classifica fornecedores de GPU e armazena resultado em cache', () => {
+    let rendererMock = 'NVIDIA GeForce RTX 3080';
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((type) => {
+      if (type === 'webgl' || type === 'experimental-webgl') {
+        return {
+          getExtension: (name) =>
+            name === 'WEBGL_debug_renderer_info' ? { UNMASKED_RENDERER_WEBGL: 0x9246 } : null,
+          getParameter: (param) => (param === 0x9246 ? rendererMock : null),
+        };
+      }
+      return null;
+    });
+
+    expect(detectarFabricanteGpu()).toBe('nvidia');
+
+    // Comprovando cache do módulo: alterar rendererMock sem limpar cache mantém 'nvidia'
+    rendererMock = 'AMD Radeon RX 6700';
+    expect(detectarFabricanteGpu()).toBe('nvidia');
+
+    _limparCacheGpu();
+    expect(detectarFabricanteGpu()).toBe('amd');
+
+    _limparCacheGpu();
+    rendererMock = 'Intel(R) Iris(R) Xe';
+    expect(detectarFabricanteGpu()).toBe('intel');
+
+    _limparCacheGpu();
+    rendererMock = 'Outra GPU Desconhecida';
+    expect(detectarFabricanteGpu()).toBe('desconhecido');
+  });
+
+  it('o broadcaster expõe fabricanteGpu', () => {
+    const b = createBroadcaster(opcoes());
+    expect(b.fabricanteGpu()).toBe(detectarFabricanteGpu());
   });
 });
