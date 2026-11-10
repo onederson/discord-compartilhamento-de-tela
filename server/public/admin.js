@@ -760,6 +760,95 @@ function stopRelatos() {
   relatosTimer = null;
 }
 
+// ------------------------------------------------------------------ pessoas
+
+let listaPessoas = [];
+
+function renderPessoas() {
+  const busca = ($('buscaPessoas')?.value || '').trim().toLowerCase();
+  const filtradas = busca
+    ? listaPessoas.filter((p) => {
+        const nome = String(p.nome ?? '').toLowerCase();
+        const pseudonimo = String(p.pessoa ?? '').toLowerCase();
+        const id = String(p.uid ?? '').toLowerCase();
+        const convidado = p.convidado ? 'convidado' : '';
+        return (
+          nome.includes(busca) ||
+          pseudonimo.includes(busca) ||
+          id.includes(busca) ||
+          convidado.includes(busca)
+        );
+      })
+    : listaPessoas;
+
+  text('pessoasCount', String(filtradas.length));
+  const vazio = $('pessoasEmpty');
+  const scroll = $('pessoasScroll');
+
+  if (filtradas.length === 0) {
+    vazio.textContent = busca
+      ? 'Nenhuma pessoa encontrada para esta busca.'
+      : 'Nenhuma pessoa registrada.';
+    vazio.hidden = false;
+    scroll.hidden = true;
+    return;
+  }
+
+  vazio.hidden = true;
+  scroll.hidden = false;
+
+  const linhas = filtradas.map((p) => {
+    const linha = document.createElement('tr');
+
+    const tdNome = document.createElement('td');
+    tdNome.textContent = p.nome || '—';
+    if (!p.nome) tdNome.className = 'muted';
+    linha.append(tdNome);
+
+    const tdPseudonimo = document.createElement('td');
+    tdPseudonimo.textContent = p.pessoa || '—';
+    linha.append(tdPseudonimo);
+
+    const tdId = document.createElement('td');
+    if (p.convidado) {
+      tdId.textContent = 'convidado';
+      tdId.className = 'muted';
+    } else {
+      tdId.textContent = p.uid || '—';
+    }
+    linha.append(tdId);
+
+    const tdUltimaVez = document.createElement('td');
+    tdUltimaVez.textContent = formatData(p.ultimaVez);
+    linha.append(tdUltimaVez);
+
+    const tdVezes = document.createElement('td');
+    tdVezes.className = 'num';
+    tdVezes.textContent = String(p.vezes ?? 1);
+    linha.append(tdVezes);
+
+    return linha;
+  });
+
+  $('pessoasRows').replaceChildren(...linhas);
+}
+
+async function carregarPessoas() {
+  try {
+    const response = await fetch('/api/admin/pessoas', { cache: 'no-store' });
+    if (!response.ok) return;
+    const dados = await response.json();
+    if (Array.isArray(dados?.pessoas)) {
+      listaPessoas = dados.pessoas;
+      renderPessoas();
+    }
+  } catch {
+    // Falha silenciosa de rede ao carregar pessoas
+  }
+}
+
+$('buscaPessoas')?.addEventListener('input', renderPessoas);
+
 // --------------------------------------------------------------------- boot
 
 async function boot() {
@@ -789,7 +878,7 @@ async function boot() {
 
     $('loading').hidden = true;
     $('dashboard').hidden = false;
-    await loadMetrics();
+    await Promise.all([loadMetrics(), carregarPessoas()]);
     startPolling();
     startRelatos();
     abrirDoEndereco();
@@ -800,7 +889,10 @@ async function boot() {
   }
 }
 
-$('refresh').addEventListener('click', loadMetrics);
+$('refresh').addEventListener('click', () => {
+  loadMetrics();
+  carregarPessoas();
+});
 
 $('logout').addEventListener('click', async () => {
   await fetch('/api/admin/logout', { method: 'POST' }).catch(() => null);

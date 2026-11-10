@@ -339,6 +339,18 @@ describe('/api/admin/diagnostico', () => {
   });
 });
 
+describe('/api/admin/pessoas', () => {
+  it('só entrega a lista de pessoas ao admin', async () => {
+    expect((await get('/api/admin/pessoas')).status).toBe(401);
+
+    const resposta = await get('/api/admin/pessoas', { headers: comoAdmin() });
+    expect(resposta.status).toBe(200);
+    const corpo = await resposta.json();
+    expect(corpo).toHaveProperty('pessoas');
+    expect(Array.isArray(corpo.pessoas)).toBe(true);
+  });
+});
+
 describe('/api/admin/metrics', () => {
   it('recusa sem sessão, e não deixa a resposta ser cacheada', async () => {
     const resposta = await get('/api/admin/metrics');

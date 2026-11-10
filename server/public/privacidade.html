@@ -15,7 +15,7 @@
         <p><strong>Em resumo:</strong></p>
         <ul>
           <li>A sua tela e o seu áudio <strong>nunca são gravados</strong>. Eles atravessam o servidor em tempo real e são descartados no mesmo instante.</li>
-          <li>Não existe banco de dados de salas ou mídia. A instalação pode manter um diagnóstico técnico sanitizado em disco; ele não é enviado por padrão.</li>
+          <li>Não existe banco de dados de salas ou mídia. A instalação pode manter um diagnóstico técnico sanitizado em disco; ele não é enviado por padrão. O administrador mantém uma lista de quem usou (id, nome e datas de entrada) por 30 dias desde a última entrada.</li>
           <li>Do Discord recebemos apenas <strong>id, nome de usuário e foto de perfil</strong>. Não temos acesso ao seu e-mail, às suas mensagens nem à sua lista de servidores.</li>
           <li>Quando a sala esvazia, ela deixa de existir em cerca de 12 segundos — e tudo que havia nela some junto.</li>
         </ul>
@@ -79,6 +79,16 @@
         eventos técnicos como versão do Node.js, sistema operacional, etapa que falhou e pedido de
         recuperação do player. O registro não inclui tela, áudio, nomes, IDs do Discord, endereço
         IP, Client Secret, tokens ou URLs completas; campos sensíveis são removidos antes da escrita.
+        Para seguir a mesma pessoa de um evento a outro, cada evento leva um pseudônimo de 8
+        caracteres calculado a partir do seu id, que sozinho não revela quem você é.
+      </p>
+      <h3>2.5 Lista de quem usou</h3>
+      <p>
+        Para que o administrador saiba de quem é cada pseudônimo quando investiga uma falha, o
+        servidor mantém uma lista à parte com o pseudônimo, o seu id e nome no Discord (ou o apelido
+        de convidado), a primeira e a última vez que você entrou e quantas vezes entrou. Só o
+        administrador da instalação vê essa lista, no painel dele. Quem não entra há 30 dias sai dela
+        automaticamente.
       </p>
       <p>
         <strong>Nada disso é gravado, armazenado ou analisado.</strong> Não há gravação, captura de
@@ -90,8 +100,8 @@
       <h2>3. Onde os dados ficam</h2>
       <p>
         Não existe banco de dados. Salas, participantes e senhas embaralhadas vivem apenas na
-        memória do processo enquanto ele está no ar. O diagnóstico técnico opcional é a única
-        persistência criada pelo servidor para suporte.
+        memória do processo enquanto ele está no ar. O diagnóstico técnico opcional, a lista de quem
+        usou e os relatos são o que o servidor guarda em disco para suporte.
       </p>
       <div class="tabela">
         <table>
@@ -127,6 +137,11 @@
               <td>Eventos técnicos sanitizados</td>
               <td><code>.logs/diagnostico.jsonl</code> no servidor do operador</td>
               <td>Rotação em 1 MB, mantendo somente a cópia anterior</td>
+            </tr>
+            <tr>
+              <td>Lista de quem usou (pseudônimo, id, nome, datas de entrada)</td>
+              <td><code>.dados/pessoas.json</code> no servidor do operador</td>
+              <td>30 dias depois da sua última entrada</td>
             </tr>
           </tbody>
         </table>
@@ -224,8 +239,8 @@
 
       <h2>10. Relatos de problemas e denúncias</h2>
       <p>
-        Esta é a única exceção à regra de que nada fica guardado, e só acontece quando você aperta
-        “Reportar problema” ou “Denunciar transmissão”.
+        Além da lista de quem usou (seção 2.5), é o único conteúdo que fica guardado, e só acontece
+        quando você aperta “Reportar problema” ou “Denunciar transmissão”.
       </p>
       <ul>
         <li>

@@ -15,6 +15,7 @@ import { createNativeAudioBridge, packNativeAudio } from './native-audio.js';
 import { createNativeAudioAuthorizer, startNativeAudioLocalServer } from './native-audio-auth.js';
 import { criarBufferEventos, criarRelatos } from './relatos.js';
 import { criarRotasRelatos } from './relatos-rotas.js';
+import { criarRegistroPessoas } from './pessoas.js';
 import {
   createDiagnosticLogger,
   diagnosticoLigado,
@@ -52,6 +53,14 @@ const relatos = criarRelatos({
 // id do Discord nem o nome.
 const pessoa = (uid) =>
   crypto.createHash('sha256').update(String(uid)).digest('base64url').slice(0, 8);
+
+const pessoas = criarRegistroPessoas({
+  arquivo: path.join(
+    process.env.RELATOS_DIR || path.join(__dirname, '..', '.dados'),
+    'pessoas.json',
+  ),
+  pseudonimo: pessoa,
+});
 
 // Eventos que o cliente pode mandar pelo canal genérico de diagnóstico. Fora
 // daqui é ignorado em silêncio: o canal é aberto a qualquer socket autenticado e
@@ -460,6 +469,8 @@ app.post('/api/session', rateLimit, async (req, res) => {
 
     if (!me?.id) return res.status(401).json({ error: 'token invalido' });
 
+    pessoas.registrar(me.id, me.global_name || me.username);
+
     const guildId = /^[0-9]{15,21}$/.test(String(guild_id ?? '')) ? String(guild_id) : null;
     const channelId = /^[0-9]{15,21}$/.test(String(channel_id ?? '')) ? String(channel_id) : null;
 
@@ -546,6 +557,7 @@ app.post('/api/session-guest', rateLimit, (req, res) => {
     .slice(0, 32);
   const name = raw || `Convidado ${Math.floor(Math.random() * 9000 + 1000)}`;
   const uid = `guest-${crypto.randomBytes(8).toString('base64url')}`;
+  pessoas.registrar(uid, name);
   res.json(issueIdentity(WEB_INSTANCE, uid, name, null, 30 * 24 * 60 * 60));
 });
 
@@ -1280,6 +1292,8 @@ app.get('/api/admin/diagnostico', requireAdmin, (req, res) => {
   res.type('application/x-ndjson').send(lerDiagnostico(diagnostico.arquivo, kb * 1024));
 });
 
+app.get('/api/admin/pessoas', requireAdmin, (_req, res) => res.json({ pessoas: pessoas.listar() }));
+
 // Relatos e moderação. Depois do express.json() global: os corpos são pequenos.
 app.use('/api/admin', rotasRelatos.admin);
 
@@ -1442,6 +1456,7 @@ function handleControl(ws, room, auth) {
 
   R.broadcastState(room);
   diagnostico.log('control.connect', { sala: room.id, pessoa: pessoa(auth.uid) });
+  pessoas.registrar(auth.uid, auth.name);
 
   let saiu = false;
   const sair = (code) => {
@@ -1620,6 +1635,7 @@ function handleViewer(ws, room, auth) {
     voltouNaCarencia,
     transmitindo: R.broadcastersOf(room, auth.uid).length,
   });
+  pessoas.registrar(auth.uid, auth.name);
 
   ws.on('message', (data, isBinary) => {
     if (isBinary) return;
@@ -1916,6 +1932,15 @@ function avisarBuildVelho() {
   } catch {
     // Ainda sem build; o proprio arranque ja diz o que fazer.
   }
+}
+
+// A lista de pessoas grava com atraso de alguns segundos; um "pm2 restart"
+// nesse intervalo perderia as últimas entradas. Grava antes de sair.
+for (const sinal of ['SIGINT', 'SIGTERM']) {
+  process.once(sinal, () => {
+    pessoas.gravarAgora();
+    process.exit(0);
+  });
 }
 
 server.listen(PORT, () => {
