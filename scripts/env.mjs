@@ -48,6 +48,7 @@ const CONHECIDAS = [
   'DIAGNOSTICO_LOCAL',
   'DIAGNOSTICO_UPLOAD_URL',
   'DIAGNOSTICO_UPLOAD_TOKEN',
+  'DISCORD_WEBHOOK_RELATOS',
 ];
 
 /** Saída resumida para o iniciador; desligue no .env para depuração. */
@@ -134,6 +135,10 @@ export function gravarEnv(novos) {
     '# Ligue o Modo desenvolvedor (Configurações, Avançado), botão direito no',
     '# seu nome, Copiar ID. Só esta conta abre /admin. Vazio = painel desligado.',
     `DISCORD_ADMIN_ID=${v.DISCORD_ADMIN_ID ?? ''}`,
+    '',
+    '# Webhook de um canal privado que recebe relatos de problema e denúncias.',
+    '# Só aceita https://discord.com/api/webhooks/... Vazio = relatos só no /admin.',
+    `DISCORD_WEBHOOK_RELATOS=${v.DISCORD_WEBHOOK_RELATOS ?? ''}`,
     '',
     '# ID do(s) servidor(es) do Discord autorizados. Vários separados por vírgula.',
     '# Vazio = liberado para qualquer servidor onde a atividade for iniciada.',

@@ -15,7 +15,17 @@
  * imagem durante o redimensionamento.
  */
 
-export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } = {}) {
+/**
+ * Quantos quadros podem esperar na fila do decoder antes de descartarmos.
+ *
+ * Quando um jogo pega o foco, o Discord perde a GPU/foco e o decoder para de
+ * entregar quadros, mas o WebSocket continua empurrando ~60 por segundo. Sem
+ * teto, cada quadro fica retido na fila até o processo da Activity estourar a
+ * memória e o Discord trocar tudo por "Recarregar atividade".
+ */
+const MAX_FILA_DECODER = 30;
+
+export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame, onAviso } = {}) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
   let decoder = null;
@@ -27,6 +37,10 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
   // desse intervalo é idêntico a um travamento.
   let virgem = true;
   let lastResyncAt = -Infinity;
+  // Para o diagnóstico: avisa só na entrada do engasgo, não a cada quadro
+  // descartado, e conta quantos se perderam até sair dele.
+  let engasgado = false;
+  let descartados = 0;
 
   function pedirRessincronizacao() {
     needKeyframe = true;
@@ -52,6 +66,12 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
         // Erro de decodificação normalmente é fluxo fora de sincronia:
         // pedir um keyframe recupera sem derrubar a sessão.
         console.warn('[decoder]', err.message);
+        onAviso?.('decoder-erro', {
+          erro: err.message,
+          nome: err.name,
+          estado: decoder?.state,
+          codec: config.codec,
+        });
         pedirRessincronizacao();
       },
     });
@@ -71,6 +91,30 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
   /** Quadro empacotado: [1B slot][1B tipo][8B timestamp][8B envio][payload] */
   function push(buffer) {
     if (!decoder || decoder.state !== 'configured') return;
+
+    // Ninguém vê o canvas: decodificar só acumula quadros que o navegador nem
+    // desenha. Ao voltar, recuperarTelasVisiveis pede um keyframe novo.
+    if (document.visibilityState === 'hidden') {
+      needKeyframe = true;
+      return;
+    }
+
+    // Decoder engasgado (GPU tomada pelo jogo): joga fora e recomeça do
+    // próximo keyframe em vez de empilhar até a Activity cair.
+    if (decoder.decodeQueueSize > MAX_FILA_DECODER) {
+      descartados++;
+      if (!engasgado) {
+        engasgado = true;
+        onAviso?.('fila-cheia', { fila: decoder.decodeQueueSize });
+      }
+      pedirRessincronizacao();
+      return;
+    }
+    if (engasgado) {
+      engasgado = false;
+      onAviso?.('fila-normalizou', { descartados });
+      descartados = 0;
+    }
 
     const view = new DataView(buffer);
     const isKeyframe = view.getUint8(1) === 1;
@@ -172,7 +216,20 @@ export function createPlayer(canvas, { onError, onTamanho, onResync, onFrame } =
 
   const isConfigured = () => Boolean(decoder && decoder.state === 'configured');
 
-  return { start, push, stop, prepareForRecovery, isConfigured, getLag, takeFrameCount, getSizes };
+  /** Quadros esperando no decoder — o primeiro número a subir quando a GPU some. */
+  const getFila = () => decoder?.decodeQueueSize ?? 0;
+
+  return {
+    start,
+    push,
+    stop,
+    prepareForRecovery,
+    isConfigured,
+    getLag,
+    takeFrameCount,
+    getSizes,
+    getFila,
+  };
 }
 
 function deserialize(c) {

@@ -14,6 +14,7 @@ client/dist
 # vazar e para divergir.
 .env
 .cache
+.dados
 .git
 .gitignore
 

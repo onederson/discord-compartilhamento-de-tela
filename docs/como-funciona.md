@@ -66,7 +66,7 @@ saída de rede. Por isso cada tela aparece primeiro como um convite
 - **No site:** não existe call para herdar, então a lista de salas é a única
   forma de as pessoas se encontrarem. Salas podem ter senha.
 
-Salas vivem em memória e fecham sozinhas 12 segundos depois de esvaziar — a
+Salas vivem em memória e fecham sozinhas 30 segundos depois de esvaziar — a
 carência existe porque recarregar a página desconecta e reconecta.
 
 ## Som

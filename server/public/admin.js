@@ -360,6 +360,495 @@ function drawChart() {
   ctx.fillText('agora', box.width - pad.right, box.height - 4);
 }
 
+// ------------------------------------------------------------------- relatos
+
+/**
+ * Relatos de problema e denúncias, mais a moderação que sai deles.
+ *
+ * Tudo aqui vem de texto escrito por outra pessoa (o relato, o nome de quem
+ * transmitia), então só entra na página por textContent. Os prints chegam por
+ * <img src>, nunca embutidos em HTML.
+ */
+
+const CATEGORIAS = {
+  sexual: 'Conteúdo sexual',
+  violencia: 'Violência',
+  odio: 'Discurso de ódio',
+  menores: 'Risco a menores',
+  ilegal: 'Atividade ilegal',
+  golpe: 'Golpe ou fraude',
+  pirataria: 'Pirataria',
+  dados: 'Dados pessoais expostos',
+  outro: 'Outro',
+};
+
+const ID_RELATO = /^[0-9]{8}-[0-9]{6}-[0-9a-f]{4}$/;
+const RELATOS_A_CADA_MS = 15_000;
+
+// Abertos por padrão: é a fila de trabalho, e o que já foi resolvido só importa
+// quando alguém procura de propósito.
+const filtros = { tipo: null, status: 'aberto' };
+let relatosTimer = null;
+let relatoAberto = null;
+
+function el(tag, classe, texto) {
+  const node = document.createElement(tag);
+  if (classe) node.className = classe;
+  if (texto != null) node.textContent = texto;
+  return node;
+}
+
+function formatData(iso) {
+  const data = new Date(iso);
+  return Number.isNaN(data.getTime()) ? '—' : data.toLocaleString('pt-BR');
+}
+
+/** Pedido ao servidor. 401 devolve à tela de entrada; outro erro vira exceção com a mensagem. */
+async function api(caminho, corpo = null) {
+  const response = await fetch(caminho, {
+    cache: 'no-store',
+    ...(corpo
+      ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(corpo),
+        }
+      : {}),
+  });
+  if (response.status === 401) {
+    location.reload();
+    throw new Error('sessão expirada');
+  }
+  const dados = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(dados.error || `servidor respondeu ${response.status}`);
+  return dados;
+}
+
+function seloStatus(relato) {
+  return relato.status === 'aberto'
+    ? el('span', 'badge warn', 'aberto')
+    : el('span', 'badge on', 'resolvido');
+}
+
+async function carregarRelatos() {
+  try {
+    const consulta = new URLSearchParams();
+    if (filtros.tipo) consulta.set('tipo', filtros.tipo);
+    if (filtros.status) consulta.set('status', filtros.status);
+    const [{ relatos }, { bloqueios }] = await Promise.all([
+      api(`/api/admin/relatos?${consulta}`),
+      api('/api/admin/moderacao/bloqueios'),
+    ]);
+    renderRelatos(relatos);
+    renderBloqueios(bloqueios);
+  } catch {
+    // A lista é secundária ao resto do painel; o aviso de conexão perdida já
+    // cobre a queda do servidor, então uma falha aqui não pede aviso próprio.
+  }
+}
+
+function renderRelatos(relatos) {
+  text('relatosCount', String(relatos.length));
+  $('relatosEmpty').hidden = relatos.length > 0;
+  $('relatosScroll').hidden = relatos.length === 0;
+
+  const linhas = relatos.map((relato) => {
+    const linha = document.createElement('tr');
+    if (relato.urgente) linha.classList.add('urgente');
+    if (relato.id === relatoAberto) linha.classList.add('ativa');
+    linha.tabIndex = 0;
+    linha.addEventListener('click', () => abrirRelato(relato.id));
+    linha.addEventListener('keydown', (evento) => {
+      if (evento.key === 'Enter' || evento.key === ' ') {
+        evento.preventDefault();
+        abrirRelato(relato.id);
+      }
+    });
+
+    celula(linha, formatData(relato.criadoEm));
+
+    const tipo = document.createElement('td');
+    tipo.textContent = relato.tipo === 'denuncia' ? 'Denúncia' : 'Bug';
+    if (relato.urgente) tipo.append(' ', el('span', 'badge urgente-selo', 'URGENTE'));
+    linha.append(tipo);
+
+    celula(linha, relato.categoria ? (CATEGORIAS[relato.categoria] ?? relato.categoria) : '—');
+
+    const previa = el('td', 'previa', relato.previa || '—');
+    previa.title = relato.previa;
+    linha.append(previa);
+
+    const status = document.createElement('td');
+    status.append(seloStatus(relato));
+    linha.append(status);
+    return linha;
+  });
+  $('relatosRows').replaceChildren(...linhas);
+}
+
+function renderBloqueios(bloqueios) {
+  text('bloqueiosCount', String(bloqueios.length));
+  $('bloqueiosEmpty').hidden = bloqueios.length > 0;
+  $('bloqueiosScroll').hidden = bloqueios.length === 0;
+
+  const linhas = bloqueios.map((b) => {
+    const linha = document.createElement('tr');
+    celula(linha, b.nome || b.uid, b.uid);
+    celula(linha, b.motivo || '—');
+    celula(linha, b.por || '—', formatData(b.em));
+
+    const acao = document.createElement('td');
+    const botao = el('button', 'btn', 'Desbloquear');
+    botao.type = 'button';
+    botao.addEventListener('click', async () => {
+      botao.disabled = true;
+      try {
+        await api('/api/admin/moderacao/desbloquear', { uid: b.uid });
+      } catch (erro) {
+        alert(`Não foi possível desbloquear: ${erro.message}`);
+      }
+      carregarRelatos();
+    });
+    acao.append(botao);
+    linha.append(acao);
+    return linha;
+  });
+  $('bloqueiosRows').replaceChildren(...linhas);
+}
+
+// ------------------------------------------------------------------ detalhe
+
+function linhaDl(rotulo, valor) {
+  const par = document.createElement('div');
+  par.append(el('dt', null, rotulo), el('dd', null, valor || '—'));
+  return par;
+}
+
+function eventoLinha(evento) {
+  const item = el('li');
+  const hora = new Date(evento.at);
+  item.append(
+    el('time', null, Number.isNaN(hora.getTime()) ? '—' : hora.toLocaleTimeString('pt-BR')),
+    el('code', null, evento.event),
+  );
+  const dados = Object.entries(evento.data ?? {})
+    .map(
+      ([chave, valor]) => `${chave}=${typeof valor === 'object' ? JSON.stringify(valor) : valor}`,
+    )
+    .join(' ');
+  if (dados) item.append(el('span', 'muted', dados));
+  return item;
+}
+
+function avisoDetalhe(mensagem, erro = false) {
+  const aviso = $('relatoAviso');
+  if (!aviso) return;
+  aviso.textContent = mensagem;
+  aviso.className = erro ? 'banner' : 'aviso-ok';
+  aviso.hidden = false;
+}
+
+function botaoAcao(rotulo, classe, aoClicar) {
+  const botao = el('button', `btn ${classe}`.trim(), rotulo);
+  botao.type = 'button';
+  botao.addEventListener('click', async () => {
+    botao.disabled = true;
+    try {
+      await aoClicar();
+    } catch (erro) {
+      avisoDetalhe(`Não deu certo: ${erro.message}`, true);
+    } finally {
+      botao.disabled = false;
+    }
+  });
+  return botao;
+}
+
+async function abrirRelato(id) {
+  if (!ID_RELATO.test(id)) return;
+  const caixa = $('relatoDetalhe');
+  try {
+    const relato = await api(`/api/admin/relatos/${id}`);
+    relatoAberto = id;
+    caixa.replaceChildren(montarDetalhe(relato));
+    caixa.hidden = false;
+    caixa.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    carregarRelatos();
+  } catch (erro) {
+    relatoAberto = null;
+    caixa.replaceChildren(el('p', 'banner', `Não foi possível abrir o relato: ${erro.message}`));
+    caixa.hidden = false;
+  }
+}
+
+function montarDetalhe(relato) {
+  const raiz = el('article', relato.urgente ? 'relato urgente' : 'relato');
+  raiz.id = `relato-${relato.id}`;
+
+  const cabeca = el('div', 'panel-head');
+  const titulo =
+    relato.tipo === 'denuncia'
+      ? `Denúncia: ${CATEGORIAS[relato.categoria] ?? relato.categoria}`
+      : 'Problema relatado';
+  cabeca.append(el('h3', null, titulo));
+  if (relato.urgente) cabeca.append(el('span', 'badge urgente-selo', 'URGENTE'));
+  cabeca.append(el('div', 'spacer'), seloStatus(relato));
+  const fechar = el('button', 'btn', 'Fechar');
+  fechar.type = 'button';
+  fechar.addEventListener('click', () => {
+    relatoAberto = null;
+    $('relatoDetalhe').hidden = true;
+    if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+    carregarRelatos();
+  });
+  cabeca.append(fechar);
+  raiz.append(cabeca);
+
+  if (relato.urgente) {
+    raiz.append(
+      el(
+        'p',
+        'banner',
+        'Nenhuma imagem foi guardada. Encerre ou bloqueie por aqui e denuncie ao Discord e à SaferNet.',
+      ),
+    );
+  }
+
+  raiz.append(el('p', 'relato-texto', relato.texto || '(sem texto)'));
+
+  const dl = el('dl', 'dl dl-largo');
+  dl.append(
+    linhaDl('Data', formatData(relato.criadoEm)),
+    linhaDl('Origem', relato.origem),
+    linhaDl('Sala', relato.sala ? `${relato.sala.nome ?? '—'} (${relato.sala.id})` : '—'),
+    linhaDl('Quem relatou', relato.quem ? `${relato.quem.nome} (${relato.quem.uid})` : '—'),
+  );
+  if (relato.alvo) {
+    dl.append(
+      linhaDl('Quem transmitia', `${relato.alvo.nome} (${relato.alvo.uid})`),
+      linhaDl('Fonte', relato.alvo.fonte),
+      linhaDl(
+        'Transmitindo há',
+        Number.isFinite(relato.alvo.transmitindoHaS)
+          ? formatDuration(relato.alvo.transmitindoHaS)
+          : '—',
+      ),
+    );
+  }
+  if (relato.resolucao) {
+    dl.append(
+      linhaDl('Resolvido', `${formatData(relato.resolucao.em)} por ${relato.resolucao.por}`),
+      linhaDl('Nota', relato.resolucao.nota),
+    );
+  }
+  raiz.append(dl);
+
+  if (relato.prints > 0) {
+    const galeria = el('div', 'prints');
+    for (let n = 1; n <= relato.prints; n++) {
+      const link = document.createElement('a');
+      link.href = `/api/admin/relatos/${relato.id}/print/${n}`;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      const img = document.createElement('img');
+      img.src = link.href;
+      img.alt = `Print ${n} da transmissão`;
+      img.loading = 'lazy';
+      link.append(img);
+      galeria.append(link);
+    }
+    raiz.append(galeria);
+  }
+
+  const eventos = relato.servidor?.eventos ?? [];
+  if (eventos.length) {
+    const lista = el('ol', 'linha-do-tempo');
+    lista.append(...eventos.map(eventoLinha));
+    const detalhes = el('details');
+    detalhes.open = true;
+    detalhes.append(el('summary', null, `Linha do tempo do servidor (${eventos.length})`), lista);
+    raiz.append(detalhes);
+  }
+
+  const contexto = {};
+  if (relato.contexto) contexto.contexto = relato.contexto;
+  if (relato.servidor?.sala) contexto.salaNoMomento = relato.servidor.sala;
+  if (Object.keys(contexto).length) {
+    const detalhes = el('details');
+    detalhes.append(
+      el('summary', null, 'Contexto'),
+      el('pre', 'json', JSON.stringify(contexto, null, 2)),
+    );
+    raiz.append(detalhes);
+  }
+
+  const aviso = el('p', 'aviso-ok');
+  aviso.id = 'relatoAviso';
+  aviso.hidden = true;
+  raiz.append(aviso);
+
+  const acoes = el('div', 'acoes');
+  if (relato.alvo?.uid) {
+    acoes.append(
+      botaoAcao('Encerrar transmissão', 'btn-perigo', async () => {
+        if (!confirm(`Encerrar as transmissões de ${relato.alvo.nome}?`)) return;
+        const { encerradas } = await api('/api/admin/moderacao/encerrar', { uid: relato.alvo.uid });
+        avisoDetalhe(`${count(encerradas, 'transmissão encerrada', 'transmissões encerradas')}.`);
+      }),
+      botaoAcao('Bloquear', 'btn-perigo', async () => {
+        const motivo = prompt(`Motivo do bloqueio de ${relato.alvo.nome}:`, relato.categoria ?? '');
+        if (motivo === null) return;
+        const { encerradas } = await api('/api/admin/moderacao/bloquear', {
+          uid: relato.alvo.uid,
+          nome: relato.alvo.nome,
+          motivo,
+        });
+        const paradas = count(encerradas, 'transmissão encerrada', 'transmissões encerradas');
+        avisoDetalhe(`${relato.alvo.nome} foi bloqueado (${paradas}).`);
+        carregarRelatos();
+      }),
+    );
+  }
+  if (relato.status === 'aberto') {
+    acoes.append(
+      botaoAcao('Marcar resolvido', 'btn-brand-suave', async () => {
+        const nota = prompt('Nota sobre a resolução (opcional):', '');
+        if (nota === null) return;
+        await api(`/api/admin/relatos/${relato.id}/resolver`, { nota });
+        await abrirRelato(relato.id);
+      }),
+    );
+  }
+  raiz.append(acoes);
+  return raiz;
+}
+
+function aplicarFiltros() {
+  for (const botao of document.querySelectorAll('.chip')) {
+    const ativo = filtros[botao.dataset.filtro] === botao.dataset.valor;
+    botao.classList.toggle('ativo', ativo);
+    botao.setAttribute('aria-pressed', String(ativo));
+  }
+}
+
+for (const botao of document.querySelectorAll('.chip')) {
+  botao.addEventListener('click', () => {
+    const { filtro, valor } = botao.dataset;
+    // Clicar de novo no filtro ativo tira o filtro.
+    filtros[filtro] = filtros[filtro] === valor ? null : valor;
+    aplicarFiltros();
+    carregarRelatos();
+  });
+}
+
+/** Abre o relato do endereço (#relato-<id>), que é o link do aviso no Discord. */
+function abrirDoEndereco() {
+  const achado = /^#relato-(.+)$/.exec(location.hash);
+  if (achado && ID_RELATO.test(achado[1])) abrirRelato(achado[1]);
+}
+
+window.addEventListener('hashchange', abrirDoEndereco);
+
+function startRelatos() {
+  aplicarFiltros();
+  carregarRelatos();
+  if (!relatosTimer) relatosTimer = setInterval(carregarRelatos, RELATOS_A_CADA_MS);
+}
+
+function stopRelatos() {
+  clearInterval(relatosTimer);
+  relatosTimer = null;
+}
+
+// ------------------------------------------------------------------ pessoas
+
+let listaPessoas = [];
+
+function renderPessoas() {
+  const busca = ($('buscaPessoas')?.value || '').trim().toLowerCase();
+  const filtradas = busca
+    ? listaPessoas.filter((p) => {
+        const nome = String(p.nome ?? '').toLowerCase();
+        const pseudonimo = String(p.pessoa ?? '').toLowerCase();
+        const id = String(p.uid ?? '').toLowerCase();
+        const convidado = p.convidado ? 'convidado' : '';
+        return (
+          nome.includes(busca) ||
+          pseudonimo.includes(busca) ||
+          id.includes(busca) ||
+          convidado.includes(busca)
+        );
+      })
+    : listaPessoas;
+
+  text('pessoasCount', String(filtradas.length));
+  const vazio = $('pessoasEmpty');
+  const scroll = $('pessoasScroll');
+
+  if (filtradas.length === 0) {
+    vazio.textContent = busca
+      ? 'Nenhuma pessoa encontrada para esta busca.'
+      : 'Nenhuma pessoa registrada.';
+    vazio.hidden = false;
+    scroll.hidden = true;
+    return;
+  }
+
+  vazio.hidden = true;
+  scroll.hidden = false;
+
+  const linhas = filtradas.map((p) => {
+    const linha = document.createElement('tr');
+
+    const tdNome = document.createElement('td');
+    tdNome.textContent = p.nome || '—';
+    if (!p.nome) tdNome.className = 'muted';
+    linha.append(tdNome);
+
+    const tdPseudonimo = document.createElement('td');
+    tdPseudonimo.textContent = p.pessoa || '—';
+    linha.append(tdPseudonimo);
+
+    const tdId = document.createElement('td');
+    if (p.convidado) {
+      tdId.textContent = 'convidado';
+      tdId.className = 'muted';
+    } else {
+      tdId.textContent = p.uid || '—';
+    }
+    linha.append(tdId);
+
+    const tdUltimaVez = document.createElement('td');
+    tdUltimaVez.textContent = formatData(p.ultimaVez);
+    linha.append(tdUltimaVez);
+
+    const tdVezes = document.createElement('td');
+    tdVezes.className = 'num';
+    tdVezes.textContent = String(p.vezes ?? 1);
+    linha.append(tdVezes);
+
+    return linha;
+  });
+
+  $('pessoasRows').replaceChildren(...linhas);
+}
+
+async function carregarPessoas() {
+  try {
+    const response = await fetch('/api/admin/pessoas', { cache: 'no-store' });
+    if (!response.ok) return;
+    const dados = await response.json();
+    if (Array.isArray(dados?.pessoas)) {
+      listaPessoas = dados.pessoas;
+      renderPessoas();
+    }
+  } catch {
+    // Falha silenciosa de rede ao carregar pessoas
+  }
+}
+
+$('buscaPessoas')?.addEventListener('input', renderPessoas);
+
 // --------------------------------------------------------------------- boot
 
 async function boot() {
@@ -389,8 +878,10 @@ async function boot() {
 
     $('loading').hidden = true;
     $('dashboard').hidden = false;
-    await loadMetrics();
+    await Promise.all([loadMetrics(), carregarPessoas()]);
     startPolling();
+    startRelatos();
+    abrirDoEndereco();
   } catch {
     $('loading').hidden = true;
     $('login').hidden = false;
@@ -398,7 +889,10 @@ async function boot() {
   }
 }
 
-$('refresh').addEventListener('click', loadMetrics);
+$('refresh').addEventListener('click', () => {
+  loadMetrics();
+  carregarPessoas();
+});
 
 $('logout').addEventListener('click', async () => {
   await fetch('/api/admin/logout', { method: 'POST' }).catch(() => null);
@@ -408,9 +902,14 @@ $('logout').addEventListener('click', async () => {
 window.addEventListener('resize', () => ultimo && drawChart());
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) return stopPolling();
+  if (document.hidden) {
+    stopPolling();
+    stopRelatos();
+    return;
+  }
   loadMetrics();
   startPolling();
+  startRelatos();
 });
 
 boot();

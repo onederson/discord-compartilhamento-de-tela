@@ -5,6 +5,7 @@ import { withTimeout } from './async.js';
 import { enterImmersive, fullscreenElement, leaveImmersive } from './immersive.js';
 import { canCaptureScreen, defaultBroadcastQuality, isMobileClient } from './platform.js';
 import { recoverableSlots, shouldRecoverStream } from './recovery.js';
+import { createCaixaPreta } from './caixa-preta.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -23,8 +24,20 @@ const P = inDiscord ? '/.proxy' : '';
 
 let logWindow = 0;
 let logCount = 0;
-function reportLog(level, message, details = {}) {
+// Últimos registros de log, só em memória, para anexar a um relato de problema.
+// Entra tudo o que passa por reportLog, inclusive o que o limite de envio barra.
+const ULTIMOS_LOGS = 20;
+const ultimosLogs = []; // { nivel, msg, t }
+/**
+ * @param {string} [event] nome próprio no diagnóstico do servidor
+ *   (crash-suspeito, unload, decoder, fila, memoria); sem ele vira client.error.
+ * @param {{beacon?: boolean}} [opcoes] beacon para quando a página está
+ *   morrendo e um fetch comum seria cancelado no meio.
+ */
+function reportLog(level, message, details = {}, event = undefined, { beacon = false } = {}) {
   const now = Date.now();
+  ultimosLogs.push({ nivel: level, msg: String(message).slice(0, 200), t: now });
+  if (ultimosLogs.length > ULTIMOS_LOGS) ultimosLogs.shift();
   if (now - logWindow >= 60_000) {
     logWindow = now;
     logCount = 0;
@@ -33,17 +46,53 @@ function reportLog(level, message, details = {}) {
   logCount++;
   let body;
   try {
-    body = JSON.stringify({ level, message: String(message).slice(0, 2_000), details });
+    body = JSON.stringify({ level, message: String(message).slice(0, 2_000), details, event });
   } catch {
     return;
+  }
+  if (beacon && navigator.sendBeacon) {
+    // text/plain não tem preflight: é o único tipo que sai a tempo no pagehide.
+    try {
+      if (navigator.sendBeacon(`${P}/api/logs`, new Blob([body], { type: 'text/plain' }))) return;
+    } catch {
+      /* cai no fetch abaixo */
+    }
   }
   // Fire and forget log endpoint
   fetch(`${P}/api/logs`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body,
+    keepalive: beacon,
     signal: AbortSignal.timeout(5_000),
   }).catch(() => {});
+}
+
+// Ver caixa-preta.js. Inicia antes de tudo para pegar até um arranque que trave.
+const caixaPreta = createCaixaPreta({
+  storage: (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })(),
+});
+{
+  const { anterior, morreuSemAviso } = caixaPreta.iniciar({
+    discord: inDiscord,
+    movel: clienteMovel,
+    ua: navigator.userAgent.match(/(Discord|Chrome|Firefox|Safari)\/[\d.]+/g)?.join(' ') ?? null,
+  });
+  if (morreuSemAviso) {
+    const r = caixaPreta.resumo(anterior);
+    reportLog(
+      'error',
+      'A atividade anterior morreu sem descarregar (iframe derrubado, falta de memória ou GPU)',
+      r,
+      'crash-suspeito',
+    );
+  }
 }
 
 const originalConsoleError = console.error;
@@ -63,10 +112,20 @@ console.error = function (...args) {
 };
 
 window.addEventListener('error', (e) => {
-  reportLog('error', e.message, { filename: e.filename, lineno: e.lineno, colno: e.colno });
+  caixaPreta.registrar('js.erro', { msg: e.message, linha: e.lineno });
+  reportLog('error', e.message, {
+    filename: e.filename,
+    lineno: e.lineno,
+    colno: e.colno,
+    stack: e.error?.stack?.slice(0, 1_500),
+  });
 });
 window.addEventListener('unhandledrejection', (e) => {
-  reportLog('error', 'Unhandled Promise Rejection', { reason: String(e.reason) });
+  caixaPreta.registrar('js.rejeicao', { msg: e.reason?.message ?? String(e.reason) });
+  reportLog('error', 'Unhandled Promise Rejection', {
+    reason: String(e.reason),
+    stack: e.reason?.stack?.slice(0, 1_500),
+  });
 });
 
 // Um decoder e um canvas por transmissor, indexados pelo slot que o servidor
@@ -81,6 +140,17 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 const available = new Map(); // slot -> { userId, config }
 const watching = new Map(); // slots que eu pedi para assistir
 
+// Quem eu assistia e a transmissão sumiu sem eu desistir (queda, troca de aba
+// de captura). Quando a mesma pessoa volta — quase sempre em outro slot — a
+// intenção de assistir continua valendo por um tempo, sem novo clique.
+const RETOMAR_JANELA_MS = 120_000;
+const retomarDepois = new Map(); // `${userId}|${fonte}` -> expiraEm
+
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
+
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
 const abas = new Set();
@@ -93,8 +163,17 @@ let ws = null;
 let participants = [];
 let reconnectDelay = 1000;
 let reconnectTimer = null;
+let vigiaSilencio = null;
+// Diagnóstico para o servidor (ver docs/diagnostico.md). Eventos gerados com o
+// socket fora do ar esperam aqui, e saem quando ele reabre; os mais antigos
+// perdem a vaga, porque o que importa é o que aconteceu perto da volta.
+const DIAG_FILA_MAX = 20;
+const filaDiag = [];
+let jaConectouNestaCarga = false;
 let connectionTimer = null;
 let connectionState = 'connecting';
+// Nome do bundle que o servidor diz ser o atual, para o contexto dos relatos.
+let assetServidor = null;
 let lagTimer = null;
 // Transmissão nascida aqui dentro, quando o Discord permite capturar no iframe.
 let myBroadcast = null;
@@ -219,6 +298,7 @@ function setConnectionState(state) {
     offline: 'Sem rede',
   }[state];
   $('connectionPill').dataset.state = state;
+  $('panel').dataset.state = state;
   $('connectionText').textContent = texto;
   $('pConnection').textContent = texto;
   $('recoverStreams').disabled = state !== 'connected' || watching.size === 0;
@@ -313,10 +393,55 @@ function entradasDoGrid() {
   return saida;
 }
 
-function watchSlot(slot) {
+function diag(evento, dados = {}) {
+  const msg = JSON.stringify({ type: 'diagnostic', event: evento, dados });
+  if (ws?.readyState === WebSocket.OPEN) {
+    try {
+      ws.send(msg);
+      return;
+    } catch {
+      /* caiu entre a checagem e o envio: vai para a fila */
+    }
+  }
+  filaDiag.push(msg);
+  if (filaDiag.length > DIAG_FILA_MAX) filaDiag.shift();
+}
+
+function esvaziarFilaDiag() {
+  while (filaDiag.length && ws?.readyState === WebSocket.OPEN) ws.send(filaDiag.shift());
+}
+
+const chaveRetomada = (userId, fonte) => `${userId}|${fonte ?? 'tela'}`;
+
+// Chamado antes de apagar o slot de `watching` por motivo alheio à vontade da
+// pessoa (stream-stop, sumiu do state, slot reaproveitado).
+function lembrarParaRetomar(slot) {
+  const antigo = watching.get(slot);
+  if (!antigo) return;
+  retomarDepois.set(chaveRetomada(antigo.userId, antigo.fonte), Date.now() + RETOMAR_JANELA_MS);
+}
+
+function retomarSeLembrado(slot) {
   const info = available.get(slot);
   if (!info) return;
-  activeSlot = slot;
+  const chave = chaveRetomada(info.userId, info.fonte);
+  const expiraEm = retomarDepois.get(chave);
+  if (expiraEm === undefined) return;
+  retomarDepois.delete(chave);
+  if (Date.now() > expiraEm || watching.has(slot)) return;
+  // Quem já está no palco com outra transmissão viva não perde o foco.
+  diag('viewer-retomada', {
+    fonte: info.fonte ?? 'tela',
+    // A janela é fixa, então o momento em que foi lembrada sai da validade.
+    ausenteMs: Date.now() - (expiraEm - RETOMAR_JANELA_MS),
+  });
+  watchSlot(slot, { focar: activeSlot === null || !available.has(activeSlot) });
+}
+
+function watchSlot(slot, { focar = true } = {}) {
+  const info = available.get(slot);
+  if (!info) return;
+  if (focar) activeSlot = slot;
   watching.set(slot, { userId: info.userId, fonte: info.fonte ?? 'tela' });
   sendToRoom(JSON.stringify({ type: 'watch', slot }));
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
@@ -361,6 +486,9 @@ function recuperarTelasVisiveis() {
 }
 
 function unwatchSlot(slot) {
+  // Desistir de propósito cancela qualquer retomada automática.
+  const antigo = watching.get(slot);
+  if (antigo) retomarDepois.delete(chaveRetomada(antigo.userId, antigo.fonte));
   watching.delete(slot);
   sendToRoom(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
@@ -707,6 +835,22 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
       unwatchSlot(slot);
     });
     tile.append(stop);
+
+    // Só em transmissão de outra pessoa: denunciar a própria não faz sentido.
+    if (!isMe) {
+      const denunciar = document.createElement('button');
+      denunciar.className = 'tile-report';
+      denunciar.type = 'button';
+      denunciar.dataset.tip = 'Denunciar transmissão';
+      denunciar.setAttribute('aria-label', 'Denunciar transmissão');
+      denunciar.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 21V4M5 4h11l-2 4 2 4H5"/></svg>';
+      denunciar.addEventListener('click', (e) => {
+        e.stopPropagation();
+        abrirDenuncia(slot);
+      });
+      tile.append(denunciar);
+    }
   } else if (slot !== null) {
     // O convite tem botão próprio, que para o clique antes de chegar no tile.
     if (!palco) tile.addEventListener('click', aoClicar);
@@ -1127,6 +1271,15 @@ function openStream(slot, userId) {
       onFrame: () => {
         s.lastFrameAt = Date.now();
       },
+      onAviso: (tipo, dados) => {
+        caixaPreta.registrar(`video.${tipo}`, { slot, ...dados });
+        if (tipo === 'fila-cheia' || tipo === 'fila-normalizou') {
+          diag('viewer-fila', { tipo, fila: dados?.fila, descartados: dados?.descartados });
+        }
+        if (tipo === 'decoder-erro' || tipo === 'fila-cheia') {
+          reportLog('warn', `Player: ${tipo}`, { slot, ...dados }, 'decoder');
+        }
+      },
     }),
     // Só nasce quando a transmissão anuncia que tem som — nem toda tem.
     audio: null,
@@ -1182,6 +1335,7 @@ function closeStream(slot) {
   s.audio?.stop();
   s.canvas.remove();
   streams.delete(slot);
+  printsPorSlot.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
 }
@@ -1193,6 +1347,7 @@ function endStream(slot) {
   if (streams.size === 0) {
     clearInterval(lagTimer);
     lagTimer = null;
+    delete $('pLag').dataset.level;
     for (const id of ['pLag', 'pFps', 'pRes']) $(id).textContent = '—';
   }
 
@@ -1272,16 +1427,27 @@ function ensureStatsTimer() {
 
     const s = streams.get(activeSlot) ?? streams.values().next().value;
     if (!s) return;
-    $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
+    const lag = Math.max(0, s.player.getLag());
+    $('pLag').dataset.level = lag < 400 ? 'ok' : lag < 1500 ? 'warn' : 'bad';
+    $('pLag').textContent = `${lag} ms`;
     $('pFps').textContent = `${s.fps} fps`;
     $('pRes').textContent = s.player.getSizes().video;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
     const v = getVolume(s.userId);
-    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
-    else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
-    else if (v === 0) $('pSom').textContent = 'silenciado aqui';
-    else $('pSom').textContent = `tocando · ${Math.round(v * 100)}%`;
+    if (!s.audio) {
+      $('pSom').dataset.state = 'sem';
+      $('pSom').textContent = 'a transmissão não tem áudio';
+    } else if (!s.audio.temSom()) {
+      $('pSom').dataset.state = 'aguardando';
+      $('pSom').textContent = 'aguardando o áudio…';
+    } else if (v === 0) {
+      $('pSom').dataset.state = 'mudo';
+      $('pSom').textContent = 'silenciado aqui';
+    } else {
+      $('pSom').dataset.state = 'tocando';
+      $('pSom').textContent = `tocando · ${Math.round(v * 100)}%`;
+    }
   }, 1000);
 }
 
@@ -1344,6 +1510,7 @@ async function boot() {
   }
 
   clientId = params.get('client_id') || cfg.clientId || null;
+  assetServidor = cfg.asset ?? null;
   checkVersion(cfg.asset);
   clearTimeout(vigia);
 
@@ -1527,6 +1694,8 @@ let lobbyTimer = null;
 function limparSala() {
   clearTimeout(reconnectTimer);
   clearTimeout(connectionTimer);
+  clearInterval(vigiaSilencio);
+  vigiaSilencio = null;
   connectionTimer = null;
   reconnectTimer = null;
   reconnectDelay = 1000;
@@ -1550,6 +1719,7 @@ function limparSala() {
   closeAllStreams();
   available.clear();
   watching.clear();
+  retomarDepois.clear();
   participants = [];
   lastRoomState = null;
   activeSlot = null;
@@ -1578,6 +1748,7 @@ async function showLobby() {
   $('diagnosticText').hidden = true;
   $('diagnosticText').value = '';
   $('leaveRoom').hidden = true;
+  $('reportBug').hidden = true;
   $('roomSettings').hidden = true;
   $('share').hidden = true;
   $('camera').hidden = true;
@@ -1743,6 +1914,7 @@ function setRoomUrl(id) {
 }
 
 function openRoom(tokens, room) {
+  caixaPreta.registrar('sala.entrou');
   roomTokens = tokens;
   roomInfo = room;
 
@@ -1752,6 +1924,7 @@ function openRoom(tokens, room) {
   $('lobby').hidden = true;
   $('empty').hidden = false;
   $('share').hidden = false;
+  $('reportBug').hidden = false;
   $('camera').hidden = false;
   $('quality').hidden = false;
   $('people').hidden = false;
@@ -1975,9 +2148,11 @@ function connect() {
   }, 10_000);
 
   let abriu = false;
+  let ultimoRecebido = Date.now();
 
   socket.addEventListener('open', () => {
     if (ws !== socket) return;
+    caixaPreta.registrar('ws.open');
     clearTimeout(connectionTimer);
     connectionTimer = null;
     cancelarGracePeriodViewer();
@@ -1986,6 +2161,16 @@ function connect() {
     setConnectionState('connected');
     $('grid').hidden = false;
     setEmpty('Ninguém na sala', 'Aguardando participantes.');
+
+    esvaziarFilaDiag();
+    diag('viewer-arranque', {
+      discord: inDiscord,
+      movel: clienteMovel,
+      w: window.innerWidth,
+      h: window.innerHeight,
+      reconexao: jaConectouNestaCarga,
+    });
+    jaConectouNestaCarga = true;
 
     // O apelido é do cliente, então precisa ser reenviado a cada conexão —
     // inclusive nas reconexões, senão o nome volta ao do Discord sozinho.
@@ -1998,6 +2183,7 @@ function connect() {
 
   socket.addEventListener('message', (e) => {
     if (ws !== socket) return;
+    ultimoRecebido = Date.now();
     // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
@@ -2019,7 +2205,32 @@ function connect() {
     }
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
-    if (msg.type === 'state') {
+    if (msg.type === 'hb') {
+      // Só vigia quem já provou que o servidor manda hb; servidor antigo
+      // calaria a conexão à toa.
+      if (!vigiaSilencio) {
+        vigiaSilencio = setInterval(() => {
+          if (ws !== socket) {
+            clearInterval(vigiaSilencio);
+            vigiaSilencio = null;
+            return;
+          }
+          const ms = Date.now() - ultimoRecebido;
+          if (ms < SILENCIO_MAX_MS) return;
+          caixaPreta.registrar('ws.silencio', { ms });
+          // Num socket meio-aberto o close do navegador pode levar minutos:
+          // a queda é tratada já, e o guard `ws !== socket` ignora o close real.
+          aoFecharSocket(socket, { code: 4000, reason: 'silencio' });
+          // Depois da queda ws é null, então cai na fila e sai na reconexão.
+          diag('viewer-silencio', { ms });
+          try {
+            socket.close();
+          } catch {
+            /* já fechado */
+          }
+        }, SILENCIO_VERIFICA_MS);
+      }
+    } else if (msg.type === 'state') {
       cancelarGracePeriodViewer();
       participants = msg.participants ?? [];
       abas.clear();
@@ -2036,13 +2247,17 @@ function connect() {
 
       // Limpa o que sumiu sem stream-stop (queda abrupta, por exemplo).
       const live = new Set((msg.streams ?? []).map((s) => s.slot));
+      const novas = new Map(); // slot -> info criada agora (entrada nova)
       for (const s of msg.streams ?? []) {
         const anterior = available.get(s.slot);
         const info =
           anterior?.userId === s.userId && anterior?.fonte === (s.fonte ?? 'tela')
             ? anterior
             : { userId: s.userId, config: null };
-        if (info !== anterior) closeStream(s.slot);
+        if (info !== anterior) {
+          closeStream(s.slot);
+          novas.set(s.slot, info);
+        }
         info.watchers = s.watchers ?? [];
         // Servidor antigo não manda fonte; tela é o que sempre houve.
         info.fonte = s.fonte ?? 'tela';
@@ -2051,10 +2266,14 @@ function connect() {
       for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
       for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
       const retomaveis = new Set(recoverableSlots(watching, available));
-      for (const slot of watching.keys()) {
+      for (const slot of [...watching.keys()]) {
         if (retomaveis.has(slot)) continue;
+        lembrarParaRetomar(slot);
         watching.delete(slot);
         closeStream(slot);
+      }
+      for (const s of msg.streams ?? []) {
+        if (novas.has(s.slot)) retomarSeLembrado(s.slot);
       }
       // O socket pode cair enquanto o celular suspende a Activity. A intenção
       // de assistir sobrevive à conexão; o servidor novo precisa recebê-la de
@@ -2074,8 +2293,10 @@ function connect() {
         mesmaFonte ? anterior : { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null },
       );
       if (!mesmaFonte) {
+        lembrarParaRetomar(msg.slot);
         watching.delete(msg.slot);
         closeStream(msg.slot);
+        retomarSeLembrado(msg.slot);
       }
       renderGrid();
     } else if (msg.type === 'config') {
@@ -2098,9 +2319,11 @@ function connect() {
       if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
     } else if (msg.type === 'stream-stop') {
       available.delete(msg.slot);
+      lembrarParaRetomar(msg.slot);
       watching.delete(msg.slot);
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
+      caixaPreta.registrar('sala.sumiu');
       roomTokens = null;
       // No Discord a sala é a da call: ela é recriada e a atividade volta para
       // ela. No site, quem some é a sala escolhida, então o lugar é a lista.
@@ -2116,8 +2339,13 @@ function connect() {
     }
   });
 
-  socket.addEventListener('close', async (e) => {
+  socket.addEventListener('close', (e) => aoFecharSocket(socket, e));
+
+  async function aoFecharSocket(socket, e) {
     if (ws !== socket) return;
+    clearInterval(vigiaSilencio);
+    vigiaSilencio = null;
+    caixaPreta.registrar('ws.close', { code: e.code, abriu, visivel: document.visibilityState });
     clearTimeout(connectionTimer);
     connectionTimer = null;
     ws = null;
@@ -2169,12 +2397,15 @@ function connect() {
       );
     }
     // Backoff — evita martelar o servidor se ele estiver fora do ar.
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      if (roomTokens === sala) connect();
-    }, reconnectDelay);
+    reconnectTimer = setTimeout(
+      () => {
+        reconnectTimer = null;
+        if (roomTokens === sala) connect();
+      },
+      reconnectDelay * (0.8 + Math.random() * 0.4),
+    ); // jitter: evita reconexão em massa no mesmo instante
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
-  });
+  }
 
   socket.addEventListener('error', () => socket.close());
 }
@@ -2819,6 +3050,285 @@ $('recoverStreams').addEventListener('click', () => {
   }
   toast('Novo quadro solicitado. Sua transmissão continua aberta.');
 });
+// ------------------------------------------------------------------- relatos
+
+// Os dois formulários falam com o servidor pelo mesmo `post`, sem o retry de
+// identidade: o token da sala é o que autentica, e não há crachá a renovar.
+const tokenDaSala = () => roomTokens?.viewerToken ?? null;
+
+function mostrarStatus(el, texto, { erro = true } = {}) {
+  el.textContent = texto;
+  el.classList.toggle('modal-ok', !erro);
+  el.hidden = !texto;
+}
+
+/**
+ * Resumo técnico anexado ao relato de problema. Só números e textos curtos:
+ * nada de nomes, tokens ou links. O token da sala vai só no campo próprio do
+ * pedido.
+ */
+function contextoDoRelato() {
+  const mem = performance.memory;
+  const agora = Date.now();
+  return {
+    caixaPreta: caixaPreta.resumo(),
+    bundle: import.meta.url.split('/').pop().split('?')[0],
+    bundleServidor: assetServidor,
+    inDiscord,
+    clienteMovel,
+    userAgent:
+      navigator.userAgent.match(/(Discord|Chrome|Firefox|Safari)\/[\d.]+/g)?.join(' ') ?? null,
+    janela: { w: window.innerWidth, h: window.innerHeight },
+    telaCheia,
+    visibilidade: document.visibilityState,
+    memMb: mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null,
+    connectionState,
+    streams: [...streams.entries()].map(([slot, s]) => {
+      const cfg = available.get(slot)?.config;
+      return {
+        slot,
+        fonte: available.get(slot)?.fonte === 'camera' ? 'camera' : 'tela',
+        fps: s.fps ?? 0,
+        lagMs: Math.max(0, s.player.getLag?.() ?? 0),
+        config: cfg
+          ? { codec: cfg.codec, codedWidth: cfg.codedWidth, codedHeight: cfg.codedHeight }
+          : null,
+        getSizes: s.player.getSizes?.() ?? null,
+        getFila: s.player.getFila?.() ?? 0,
+        recoveries: s.recoveries ?? 0,
+      };
+    }),
+    ultimosErros: ultimosLogs.map((l) => ({
+      nivel: l.nivel,
+      msg: l.msg,
+      haS: Math.round((agora - l.t) / 1000),
+    })),
+  };
+}
+
+const BUG_MIN = 10;
+let bugEnviando = false;
+let bugEnviado = false;
+
+function atualizarBug() {
+  const n = $('bugText').value.length;
+  $('bugCount').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bugCount').dataset.state = n < BUG_MIN ? 'curto' : 'ok';
+  $('bugSend').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
+}
+
+function abrirBug() {
+  // Aberto pelo painel de diagnóstico, ele é recolhido para não competir.
+  setPanel(false);
+  bugEnviando = false;
+  bugEnviado = false;
+  $('bugText').value = '';
+  $('bugText').disabled = false;
+  $('bugCancel').textContent = 'Cancelar';
+  $('bugSend').textContent = 'Enviar';
+  mostrarStatus($('bugStatus'), '');
+  atualizarBug();
+  openModal('bugModal');
+  $('bugText').focus();
+}
+
+async function enviarBug() {
+  if ($('bugSend').disabled) return;
+  bugEnviando = true;
+  $('bugText').disabled = true;
+  $('bugSend').textContent = 'Enviando…';
+  mostrarStatus($('bugStatus'), '');
+  atualizarBug();
+  try {
+    const r = await post(
+      `${P}/api/relatos/bug`,
+      {
+        token: tokenDaSala(),
+        origem: 'atividade',
+        texto: $('bugText').value.trim(),
+        contexto: contextoDoRelato(),
+      },
+      { retry: false },
+    );
+    bugEnviado = true;
+    mostrarStatus($('bugStatus'), `Recebido! Código ${r.id}`, { erro: false });
+    $('bugCancel').textContent = 'Fechar';
+  } catch (err) {
+    mostrarStatus($('bugStatus'), err.message);
+    $('bugText').disabled = false;
+  } finally {
+    bugEnviando = false;
+    $('bugSend').textContent = 'Enviar';
+    atualizarBug();
+  }
+}
+
+$('reportBug').addEventListener('click', abrirBug);
+$('reportBugPanel').addEventListener('click', abrirBug);
+$('bugText').addEventListener('input', atualizarBug);
+$('bugSend').addEventListener('click', enviarBug);
+$('bugCancel').addEventListener('click', () => closeModal('bugModal'));
+$('bugModal').addEventListener('click', (e) => {
+  if (e.target === $('bugModal')) closeModal('bugModal');
+});
+
+// ----------------------------------------------------------------- denúncias
+
+const PRINT_INTERVALO_MS = 5_000;
+const PRINT_LARGURA = 960;
+const PRINTS_POR_SLOT = 3;
+const PRINT_MAX_DATAURL = 400_000;
+const DENUNCIA_OUTRO_MIN = 5;
+
+// slot -> últimos prints (Blob JPEG), do mais antigo para o mais novo.
+const printsPorSlot = new Map();
+
+/**
+ * Copia o canvas do player, reduzido, como JPEG. Se passar do limite do
+ * servidor, repete com qualidade menor; devolve null se nada couber.
+ */
+async function copiarCanvas(canvas) {
+  if (!canvas.width || !canvas.height) return null;
+  const escala = Math.min(1, PRINT_LARGURA / canvas.width);
+  const reduzido = document.createElement('canvas');
+  reduzido.width = Math.max(1, Math.round(canvas.width * escala));
+  reduzido.height = Math.max(1, Math.round(canvas.height * escala));
+  const ctx = reduzido.getContext('2d');
+  if (!ctx) return null;
+  ctx.drawImage(canvas, 0, 0, reduzido.width, reduzido.height);
+  for (const qualidade of [0.7, 0.5, 0.35, 0.2]) {
+    const blob = await new Promise((resolve) => reduzido.toBlob(resolve, 'image/jpeg', qualidade));
+    // 4/3 do binário em base64, mais o prefixo "data:image/jpeg;base64,".
+    if (blob && Math.ceil(blob.size / 3) * 4 + 23 <= PRINT_MAX_DATAURL) return blob;
+  }
+  return null;
+}
+
+async function blobParaDataUrl(blob) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return `data:image/jpeg;base64,${btoa(bin)}`;
+}
+
+async function guardarPrint(slot, s) {
+  const blob = await copiarCanvas(s.canvas);
+  // A transmissão pode ter fechado enquanto o JPEG era gerado.
+  if (!blob || streams.get(slot) !== s) return;
+  const lista = printsPorSlot.get(slot) ?? [];
+  lista.push(blob);
+  if (lista.length > PRINTS_POR_SLOT) lista.splice(0, lista.length - PRINTS_POR_SLOT);
+  printsPorSlot.set(slot, lista);
+}
+
+setInterval(() => {
+  // Aba oculta não desenha nada de novo: o print só repetiria o anterior.
+  if (document.visibilityState !== 'visible') return;
+  for (const [slot, s] of streams) {
+    // Transmissão própria não é denunciável, e sem quadro o print sai preto.
+    if (!s.started || s.userId === session?.user?.id) continue;
+    guardarPrint(slot, s).catch(() => {});
+  }
+}, PRINT_INTERVALO_MS);
+
+let denunciaSlot = null;
+let denunciaEnviando = false;
+let denunciaEnviada = false;
+let denunciaPrintAgora = null; // promessa do print tirado ao abrir o modal
+
+const categoriasDaDenuncia = () => document.querySelectorAll('input[name="reportCat"]');
+const categoriaDaDenuncia = () =>
+  document.querySelector('input[name="reportCat"]:checked')?.value ?? null;
+
+function atualizarDenuncia() {
+  const cat = categoriaDaDenuncia();
+  const obrigatorio = cat === 'outro';
+  $('reportNote').textContent =
+    cat === 'menores'
+      ? 'Nenhuma imagem será enviada. A moderação será avisada com urgência. Se houver risco imediato, denuncie também ao Discord e à SaferNet (denuncie.org.br).'
+      : 'Prints dos últimos segundos desta transmissão serão enviados à moderação.';
+  $('reportOpt').hidden = obrigatorio;
+  $('reportSend').disabled =
+    denunciaEnviando ||
+    denunciaEnviada ||
+    !cat ||
+    (obrigatorio && $('reportText').value.trim().length < DENUNCIA_OUTRO_MIN);
+}
+
+function abrirDenuncia(slot) {
+  denunciaSlot = slot;
+  denunciaEnviando = false;
+  denunciaEnviada = false;
+  for (const r of categoriasDaDenuncia()) {
+    r.checked = false;
+    r.disabled = false;
+  }
+  $('reportText').value = '';
+  $('reportText').disabled = false;
+  $('reportCancel').textContent = 'Cancelar';
+  $('reportSend').textContent = 'Enviar';
+  mostrarStatus($('reportStatus'), '');
+  atualizarDenuncia();
+  // Um print na hora, além dos do buffer. Fica fora dele, que guarda no máximo 3.
+  const s = streams.get(slot);
+  denunciaPrintAgora = s ? copiarCanvas(s.canvas).catch(() => null) : Promise.resolve(null);
+  openModal('reportModal');
+  categoriasDaDenuncia()[0].focus();
+}
+
+async function enviarDenuncia() {
+  if ($('reportSend').disabled) return;
+  const categoria = categoriaDaDenuncia();
+  denunciaEnviando = true;
+  for (const r of categoriasDaDenuncia()) r.disabled = true;
+  $('reportText').disabled = true;
+  $('reportSend').textContent = 'Enviando…';
+  mostrarStatus($('reportStatus'), '');
+  atualizarDenuncia();
+  try {
+    // Menores: nenhuma imagem sai do aparelho.
+    let prints = [];
+    if (categoria !== 'menores') {
+      const blobs = [...(printsPorSlot.get(denunciaSlot) ?? [])];
+      const agora = await denunciaPrintAgora;
+      if (agora) blobs.push(agora);
+      prints = await Promise.all(blobs.slice(-4).map(blobParaDataUrl));
+    }
+    await post(
+      `${P}/api/relatos/denuncia`,
+      {
+        token: tokenDaSala(),
+        slot: denunciaSlot,
+        categoria,
+        texto: $('reportText').value.trim(),
+        prints,
+      },
+      { retry: false },
+    );
+    denunciaEnviada = true;
+    mostrarStatus($('reportStatus'), 'Denúncia enviada. Obrigado.', { erro: false });
+    $('reportCancel').textContent = 'Fechar';
+  } catch (err) {
+    mostrarStatus($('reportStatus'), err.message);
+    for (const r of categoriasDaDenuncia()) r.disabled = false;
+    $('reportText').disabled = false;
+  } finally {
+    denunciaEnviando = false;
+    $('reportSend').textContent = 'Enviar';
+    atualizarDenuncia();
+  }
+}
+
+for (const r of categoriasDaDenuncia()) r.addEventListener('change', atualizarDenuncia);
+$('reportText').addEventListener('input', atualizarDenuncia);
+$('reportSend').addEventListener('click', enviarDenuncia);
+$('reportCancel').addEventListener('click', () => closeModal('reportModal'));
+$('reportModal').addEventListener('click', (e) => {
+  if (e.target === $('reportModal')) closeModal('reportModal');
+});
+
 $('copyDiagnostics').addEventListener('click', async () => {
   const resumo = {
     app: 'Sala de Tela',
@@ -2948,7 +3458,15 @@ window.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
 
   // Fecha o modal aberto mais recente antes de mexer no modo ampliado.
-  for (const id of ['qualityModal', 'profileModal', 'roomModal', 'joinModal', 'createModal']) {
+  for (const id of [
+    'qualityModal',
+    'bugModal',
+    'reportModal',
+    'profileModal',
+    'roomModal',
+    'joinModal',
+    'createModal',
+  ]) {
     if (!$(id).hidden) {
       if (id === 'qualityModal') fecharQualidade();
       else closeModal(id);
@@ -2988,7 +3506,17 @@ $('probe').addEventListener('click', async () => {
   }
 });
 
-// Encerramento imediato de segurança e privacidade ao fechar a atividade ou sair da chamada
+// Descarregar o iframe NÃO é sinal confiável de que a pessoa saiu da atividade.
+// O Discord recria o iframe sem a pessoa sair de lugar nenhum: ao levar a
+// atividade para o overlay quando um jogo ganha foco, ao recarregar depois de
+// um reset da GPU (jogos em tela cheia exclusiva trocam o modo de vídeo) ou
+// ao alternar entre a vista cheia e a janelinha. Mandar parar a transmissão e
+// fechar a aba de captura aqui derrubava quem estava jogando no instante em
+// que clicava no jogo. Aqui só se para o que morre junto com o iframe (a
+// captura interna). Quem decide se a pessoa saiu de verdade é o servidor:
+// o socket da atividade cai e, se não voltar dentro da carência
+// (VIEWER_GRACE_MS), a transmissão é encerrada e a aba fechada. Sair pelo
+// botão continua imediato, via limparSala.
 function aoSairDaAtividade() {
   try {
     myBroadcast?.stop();
@@ -2996,47 +3524,119 @@ function aoSairDaAtividade() {
   } catch {
     /* ignora erro ao parar localmente */
   }
-
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    try {
-      ws.send(JSON.stringify({ type: 'stop-broadcast' }));
-      ws.send(JSON.stringify({ type: 'close-controls-broadcast' }));
-    } catch {
-      /* ignora erro ao enviar */
-    }
-  }
-
-  try {
-    const bc = new BroadcastChannel('discord-screenshare-focus');
-    bc.postMessage({ type: 'fechar-todas' });
-    bc.close();
-  } catch {
-    /* BroadcastChannel indisponível */
-  }
-
-  if (roomInfo?.id) {
-    try {
-      const url = `${P}/api/rooms/leave`;
-      const body = JSON.stringify({
-        roomId: roomInfo.id,
-        token: roomTokens?.viewerToken,
-        identity: session?.identity,
-      });
-      if (navigator.sendBeacon) {
-        navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }));
-      } else {
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body,
-          keepalive: true,
-        }).catch(() => {});
-      }
-    } catch {
-      /* ignora erro de envio de emergência */
-    }
-  }
 }
 
 window.addEventListener('beforeunload', aoSairDaAtividade);
 window.addEventListener('pagehide', aoSairDaAtividade);
+
+// ------------------------------------------------------------ caixa-preta
+
+// Iframe descarregado de forma limpa: a trilha sai agora, por beacon, e a
+// próxima abertura não a confunde com um crash. Se o processo morrer sem
+// chegar aqui, quem envia é o arranque seguinte (ver caixaPreta.iniciar).
+window.addEventListener('pagehide', (e) => {
+  const r = caixaPreta.encerrar(e.persisted ? 'pagehide-cache' : 'pagehide');
+  if (r && inRoom()) {
+    reportLog('info', 'Atividade descarregada', r, 'unload', { beacon: true });
+  }
+});
+
+// Clicar no jogo aparece aqui como blur (e, se o Discord ocultar a atividade,
+// visibilitychange). É a linha do tempo que diz o que veio antes da queda.
+window.addEventListener('blur', () => caixaPreta.registrar('janela.blur'));
+window.addEventListener('focus', () => caixaPreta.registrar('janela.focus'));
+let ocultoDesde = null;
+document.addEventListener('visibilitychange', () => {
+  caixaPreta.registrar('visibilidade', { estado: document.visibilityState });
+  const oculto = document.visibilityState === 'hidden';
+  const ocultoMs = !oculto && ocultoDesde !== null ? Date.now() - ocultoDesde : null;
+  ocultoDesde = oculto ? (ocultoDesde ?? Date.now()) : null;
+  // Responde se a janelinha/picture-in-picture do Discord conta como oculta,
+  // o que faz o player descartar quadros.
+  if (streams.size) {
+    diag('viewer-visibilidade', {
+      estado: document.visibilityState,
+      w: window.innerWidth,
+      h: window.innerHeight,
+      streams: streams.size,
+      ...(ocultoMs === null ? {} : { ocultoMs }),
+    });
+  }
+});
+document.addEventListener('freeze', () => caixaPreta.registrar('pagina.congelada'));
+document.addEventListener('resume', () => caixaPreta.registrar('pagina.retomada'));
+window.addEventListener('pageshow', (e) =>
+  caixaPreta.registrar('pageshow', { doCache: e.persisted }),
+);
+window.addEventListener('offline', () => caixaPreta.registrar('rede.offline'));
+window.addEventListener('online', () => caixaPreta.registrar('rede.online'));
+let redimensionarTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(redimensionarTimer);
+  redimensionarTimer = setTimeout(() => {
+    caixaPreta.registrar('janela.tamanho', { w: window.innerWidth, h: window.innerHeight });
+    if (streams.size) diag('viewer-tamanho', { w: window.innerWidth, h: window.innerHeight });
+  }, 500);
+});
+
+// Travamento do thread principal: o Discord mostra "Recarregar atividade"
+// também quando o iframe para de responder, não só quando morre.
+try {
+  new PerformanceObserver((lista) => {
+    for (const t of lista.getEntries()) {
+      if (t.duration >= 1_000) caixaPreta.registrar('tarefa.longa', { ms: Math.round(t.duration) });
+    }
+  }).observe({ type: 'longtask', buffered: false });
+} catch {
+  /* longtask indisponível neste navegador */
+}
+
+// Amostra de saúde: memória (Chromium) e fila dos decoders. Fica só na trilha;
+// vai ao servidor na hora apenas quando a memória já está perto do teto.
+let ultimoAlertaMemoria = 0;
+setInterval(() => {
+  if (!inRoom()) return;
+  const mem = performance.memory;
+  const usadoMb = mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null;
+  const limiteMb = mem ? Math.round(mem.jsHeapSizeLimit / 1_048_576) : null;
+  let fila = 0;
+  for (const s of streams.values()) fila = Math.max(fila, s.player.getFila?.() ?? 0);
+  caixaPreta.registrar('saude', {
+    memMb: usadoMb,
+    fila,
+    streams: streams.size,
+    visivel: document.visibilityState === 'visible',
+    foco: document.hasFocus(),
+  });
+  if (
+    usadoMb &&
+    limiteMb &&
+    usadoMb > limiteMb * 0.8 &&
+    Date.now() - ultimoAlertaMemoria > 300_000
+  ) {
+    ultimoAlertaMemoria = Date.now();
+    reportLog('warn', 'Memória da atividade perto do limite', caixaPreta.resumo(), 'memoria');
+  }
+}, 30_000);
+
+// Resumo de quem assiste, um por minuto, só do stream em foco: somar fontes
+// diferentes não diria nada. Vai ao servidor, ao contrário da amostra acima.
+setInterval(() => {
+  const s = streams.get(activeSlot) ?? streams.values().next().value;
+  if (!s) return;
+  const [w, h] = (s.player.getSizes?.().video ?? '').split('×').map(Number);
+  const mem = performance.memory;
+  diag('viewer-saude', {
+    fps: s.fps ?? 0,
+    lagMs: Math.max(0, s.player.getLag()),
+    w: w || 0,
+    h: h || 0,
+    fila: s.player.getFila?.() ?? 0,
+    recuperacoes: s.recoveries ?? 0,
+    memMb: mem ? Math.round(mem.usedJSHeapSize / 1_048_576) : null,
+    visivel: document.visibilityState === 'visible',
+    foco: document.hasFocus(),
+    telaCheia,
+    streams: streams.size,
+  });
+}, 60_000);

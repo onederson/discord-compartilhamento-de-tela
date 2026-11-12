@@ -8,9 +8,15 @@ vi.mock('@discord/embedded-app-sdk', () => ({
   DiscordSDK: class {},
 }));
 
+// Opções de cada player criado: os testes de print dão o "primeiro quadro" à mão.
+const jogadores = vi.hoisted(() => []);
+
 vi.mock('./player.js', () => ({
-  createPlayer: () => ({
-    start: () => true,
+  createPlayer: (_canvas, opcoes) => ({
+    start: () => {
+      jogadores.push(opcoes);
+      return true;
+    },
     stop: vi.fn(),
     push: vi.fn(),
     getLag: () => 24,
@@ -140,6 +146,8 @@ beforeEach(async () => {
     },
   );
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  // Jitter da reconexão no piso (x0,8): os atrasos ficam abaixo do nominal.
+  vi.spyOn(Math, 'random').mockReturnValue(0);
   vi.spyOn(console, 'info').mockImplementation(() => {});
   const identity = `${Buffer.from(JSON.stringify({ uid: 'guest-visitante', name: 'Visitante' })).toString('base64url')}.assinatura`;
   vi.stubGlobal(
@@ -218,10 +226,12 @@ describe('diagnóstico da sala', () => {
     expect(botao.dataset.state).toBe('connected');
     botao.click();
     expect(document.getElementById('panel').hidden).toBe(false);
+    expect(document.getElementById('panel').dataset.state).toBe('connected');
     expect(botao.getAttribute('aria-expanded')).toBe('true');
 
     socket.dispatch('close');
     expect(botao.dataset.state).toBe('reconnecting');
+    expect(document.getElementById('panel').dataset.state).toBe('reconnecting');
     expect(document.getElementById('connectionText').textContent).toBe('Reconectando');
   });
 
@@ -231,6 +241,7 @@ describe('diagnóstico da sala', () => {
     document.querySelector('.watch-prompt button').click();
     socket.message({ type: 'config', slot: 0, config });
     await vi.advanceTimersByTimeAsync(1000);
+    expect(document.getElementById('pLag').dataset.level).toBe('ok');
     const copiar = vi.fn().mockResolvedValue();
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: copiar },
@@ -283,14 +294,43 @@ describe('continuidade de quem assiste', () => {
     expect(JSON.parse(chamada[1].body).message).toContain('Falha de exemplo');
   });
 
-  it('envia o token correto da sala ao encerrar a Activity', async () => {
-    await entrar();
+  it('descarregar o iframe não encerra a transmissão nem fecha a aba de captura', async () => {
+    // O Discord recria o iframe sem a pessoa sair (overlay de jogo, reset da
+    // GPU). Quem decide que ela saiu é a carência do servidor.
+    const socket = await entrar();
     navigator.sendBeacon = vi.fn(() => true);
+    fetch.mockClear();
     window.dispatchEvent(new window.Event('pagehide'));
+    window.dispatchEvent(new window.Event('beforeunload'));
 
-    const [url, body] = navigator.sendBeacon.mock.calls[0];
-    expect(url).toBe('/api/rooms/leave');
-    expect(JSON.parse(await body.text()).token).toBe('viewer-sala-a');
+    // O único beacon permitido é o da caixa-preta, para o diagnóstico.
+    expect(navigator.sendBeacon.mock.calls.map(([url]) => url)).toEqual(['/api/logs']);
+    expect(fetch.mock.calls.some(([url]) => String(url).includes('/api/rooms/leave'))).toBe(false);
+    expect(
+      socket.sent.some((m) => m.type === 'close-controls-broadcast' || m.type === 'stop-broadcast'),
+    ).toBe(false);
+  });
+
+  it('o arranque seguinte denuncia a atividade que morreu sem pagehide', async () => {
+    // Esta página entra na sala e "morre" sem pagehide — o processo do iframe
+    // derrubado, como no "Recarregar atividade" do Discord. O próximo
+    // arranque acha a trilha aberta e a envia.
+    const socket = await entrar();
+    socket.close?.();
+    window.dispatchEvent(new window.Event('blur'));
+    fetch.mockClear();
+
+    vi.resetModules();
+    await import('./main.js');
+
+    const relato = fetch.mock.calls
+      .filter(([url]) => String(url).endsWith('/api/logs'))
+      .map(([, init]) => JSON.parse(init.body))
+      .find((b) => b.event === 'crash-suspeito');
+    expect(relato).toBeDefined();
+    expect(relato.details.trilha.join('\n')).toMatch(
+      /sala\.entrou[\s\S]*ws\.open[\s\S]*janela\.blur/,
+    );
   });
 
   it('encerra uma tentativa de conexão que nunca completa o handshake', async () => {
@@ -430,5 +470,383 @@ describe('continuidade de quem assiste', () => {
     // Após expiração do grace period (total > 15s): a limpeza é executada
     await vi.advanceTimersByTimeAsync(14_000);
     expect(document.querySelector('.tile-palco canvas')).toBeNull();
+  });
+});
+
+describe('vigia de silêncio e retomada', () => {
+  it('não arma o vigia sem hb: servidor antigo nunca é derrubado por silêncio', async () => {
+    const socket = await entrar();
+    anunciar(socket);
+    await vi.advanceTimersByTimeAsync(120_000);
+
+    expect(socket.readyState).toBe(SocketFalso.OPEN);
+    expect(sockets).toHaveLength(1);
+  });
+
+  it('com hb, 25s sem nenhuma mensagem derrubam o socket e reconectam', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(sockets).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(socket.readyState).toBe(SocketFalso.CLOSING);
+    expect(document.getElementById('connectionPill').dataset.state).toBe('reconnecting');
+
+    // O close real, tardio, não pode processar a queda duas vezes.
+    socket.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(sockets).toHaveLength(2);
+  });
+
+  it('qualquer mensagem, mesmo binária, renova o prazo do silêncio', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(20_000);
+    socket.dispatch('message', { data: new ArrayBuffer(4) });
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(socket.readyState).toBe(SocketFalso.OPEN);
+  });
+
+  async function assistirAna() {
+    const socket = await entrar();
+    anunciar(socket);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    return socket;
+  }
+
+  it('retoma sozinho quando a mesma pessoa volta em outro slot', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    socket.sent.length = 0;
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent).toContainEqual({ type: 'watch', slot: 1 });
+  });
+
+  it('não retoma depois de parar de assistir de propósito', async () => {
+    const socket = await assistirAna();
+    document.querySelector('.tile-stop').click();
+    expect(socket.sent).toContainEqual({ type: 'unwatch', slot: 0 });
+
+    socket.message({ type: 'stream-stop', slot: 0 });
+    socket.sent.length = 0;
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent.some((m) => m.type === 'watch')).toBe(false);
+  });
+
+  it('não retoma depois de 120s', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    await vi.advanceTimersByTimeAsync(121_000);
+    socket.sent.length = 0;
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(socket.sent.some((m) => m.type === 'watch')).toBe(false);
+  });
+});
+
+describe('diagnóstico enviado ao servidor', () => {
+  const diagnosticos = (socket, evento) =>
+    socket.sent.filter((m) => m.type === 'diagnostic' && m.event === evento);
+
+  async function assistirAna() {
+    const socket = await entrar();
+    anunciar(socket);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    return socket;
+  }
+
+  const definirVisibilidade = (estado) => {
+    Object.defineProperty(document, 'visibilityState', { value: estado, configurable: true });
+    document.dispatchEvent(new dom.window.Event('visibilitychange'));
+  };
+
+  it('anuncia o arranque ao abrir o socket e marca a reconexão seguinte', async () => {
+    const primeiro = await entrar();
+    expect(diagnosticos(primeiro, 'viewer-arranque')[0].dados).toMatchObject({
+      discord: false,
+      reconexao: false,
+    });
+
+    primeiro.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    sockets.at(-1).dispatch('open');
+
+    expect(diagnosticos(sockets.at(-1), 'viewer-arranque')[0].dados.reconexao).toBe(true);
+  });
+
+  it('guarda o evento gerado com o socket morto e o envia quando ele reabre', async () => {
+    const socket = await entrar();
+    socket.message({ type: 'hb' });
+    await vi.advanceTimersByTimeAsync(25_000);
+    socket.dispatch('close');
+    await vi.advanceTimersByTimeAsync(1500);
+    const novo = sockets.at(-1);
+    expect(novo).not.toBe(socket);
+    expect(diagnosticos(socket, 'viewer-silencio')).toHaveLength(0);
+
+    novo.dispatch('open');
+
+    const [silencio] = diagnosticos(novo, 'viewer-silencio');
+    expect(silencio.dados.ms).toBeGreaterThanOrEqual(25_000);
+    // A fila sai antes do arranque da nova conexão.
+    expect(novo.sent.findIndex((m) => m.event === 'viewer-silencio')).toBeLessThan(
+      novo.sent.findIndex((m) => m.event === 'viewer-arranque'),
+    );
+  });
+
+  it('a fila offline guarda no máximo 20 eventos, descartando os mais antigos', async () => {
+    const socket = await assistirAna();
+    socket.dispatch('close');
+    for (let i = 0; i < 25; i++) {
+      Object.defineProperty(window, 'innerWidth', { value: 100 + i, configurable: true });
+      definirVisibilidade(i % 2 ? 'visible' : 'hidden');
+    }
+    await vi.advanceTimersByTimeAsync(1500);
+    const novo = sockets.at(-1);
+    novo.dispatch('open');
+
+    const visibilidade = diagnosticos(novo, 'viewer-visibilidade');
+    expect(visibilidade).toHaveLength(20);
+    expect(visibilidade[0].dados.w).toBe(105);
+    expect(visibilidade.at(-1).dados.w).toBe(124);
+  });
+
+  it('informa a visibilidade com o tempo que ficou oculto ao voltar', async () => {
+    const socket = await assistirAna();
+
+    definirVisibilidade('hidden');
+    await vi.advanceTimersByTimeAsync(4000);
+    definirVisibilidade('visible');
+
+    const [oculta, visivel] = diagnosticos(socket, 'viewer-visibilidade');
+    expect(oculta.dados).toMatchObject({ estado: 'hidden', streams: 1 });
+    expect(oculta.dados).not.toHaveProperty('ocultoMs');
+    expect(visivel.dados).toMatchObject({ estado: 'visible', streams: 1, ocultoMs: 4000 });
+  });
+
+  it('não informa visibilidade nem tamanho sem nenhuma transmissão assistida', async () => {
+    const socket = await entrar();
+
+    definirVisibilidade('hidden');
+    window.dispatchEvent(new dom.window.Event('resize'));
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(diagnosticos(socket, 'viewer-visibilidade')).toHaveLength(0);
+    expect(diagnosticos(socket, 'viewer-tamanho')).toHaveLength(0);
+  });
+
+  it('envia a saúde a cada 60s enquanto assiste', async () => {
+    const socket = await assistirAna();
+    expect(diagnosticos(socket, 'viewer-saude')).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    const saude = diagnosticos(socket, 'viewer-saude');
+    expect(saude).toHaveLength(2);
+    expect(saude[0].dados).toMatchObject({
+      lagMs: 24,
+      w: 1280,
+      h: 720,
+      streams: 1,
+      recuperacoes: 0,
+      telaCheia: false,
+    });
+    expect(typeof saude[0].dados.fps).toBe('number');
+  });
+
+  it('informa a retomada automática com o tempo de ausência', async () => {
+    const socket = await assistirAna();
+    socket.message({ type: 'stream-stop', slot: 0 });
+    await vi.advanceTimersByTimeAsync(7000);
+
+    socket.message({ type: 'stream-start', slot: 1, userId: 'ana', fonte: 'tela' });
+
+    expect(diagnosticos(socket, 'viewer-retomada')[0].dados).toEqual({
+      fonte: 'tela',
+      ausenteMs: 7000,
+    });
+  });
+});
+
+describe('reportar problema e denunciar', () => {
+  let jpegs;
+
+  const chamadas = (caminho) =>
+    fetch.mock.calls.filter(
+      ([url]) => new URL(String(url), 'http://localhost').pathname === caminho,
+    );
+  const corpo = (caminho) => JSON.parse(chamadas(caminho).at(-1)[1].body);
+  const digitar = (id, texto) => {
+    const campo = document.getElementById(id);
+    campo.value = texto;
+    campo.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  const escolher = (categoria) => {
+    const radio = document.querySelector(`input[name="reportCat"][value="${categoria}"]`);
+    radio.checked = true;
+    radio.dispatchEvent(new window.Event('change', { bubbles: true }));
+  };
+
+  // O jsdom não desenha: o contexto e o JPEG são falsos, o fluxo é o de verdade.
+  beforeEach(() => {
+    jpegs = 0;
+    const canvas = dom.window.HTMLCanvasElement.prototype;
+    canvas.getContext = () => ({ drawImage: () => {} });
+    canvas.toBlob = (cb) => cb(new Blob([`jpeg-${jpegs++}`], { type: 'image/jpeg' }));
+    fetch.mockImplementation(
+      ((original) => async (url, init) => {
+        const pathname = new URL(String(url), 'http://localhost').pathname;
+        if (pathname === '/api/relatos/bug') return json({ ok: true, id: 'bug-1' });
+        if (pathname === '/api/relatos/denuncia') return json({ ok: true, id: 'den-1' });
+        return original(url, init);
+      })(fetch.getMockImplementation()),
+    );
+  });
+
+  async function assistir(opcoes) {
+    const socket = await entrar();
+    anunciar(socket, opcoes);
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    // Primeiro quadro desenhado: sem ele não há o que copiar.
+    jogadores.at(-1).onTamanho();
+    return socket;
+  }
+
+  it('bloqueia o envio com menos de 10 caracteres e manda o contexto sem tokens', async () => {
+    await assistir();
+    await vi.advanceTimersByTimeAsync(1000);
+    document.getElementById('reportBug').click();
+    const modal = document.getElementById('bugModal');
+    expect(modal.hidden).toBe(false);
+    expect(document.activeElement).toBe(document.getElementById('bugText'));
+
+    digitar('bugText', 'curto');
+    expect(document.getElementById('bugCount').dataset.state).toBe('curto');
+    expect(document.getElementById('bugSend').disabled).toBe(true);
+    digitar('bugText', 'a imagem congelou ao trocar de tela');
+    expect(document.getElementById('bugCount').dataset.state).toBe('ok');
+    expect(document.getElementById('bugSend').disabled).toBe(false);
+
+    document.getElementById('bugSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bugStatus').textContent).toBe('Recebido! Código bug-1'),
+    );
+
+    const enviado = corpo('/api/relatos/bug');
+    expect(enviado).toMatchObject({
+      token: 'viewer-sala-a',
+      origem: 'atividade',
+      texto: 'a imagem congelou ao trocar de tela',
+    });
+    expect(enviado.contexto.streams).toEqual([
+      expect.objectContaining({
+        slot: 0,
+        fonte: 'tela',
+        config: { codec: 'vp8', codedWidth: 1280, codedHeight: 720 },
+      }),
+    ]);
+    expect(enviado.contexto.connectionState).toBe('connected');
+    const semToken = JSON.stringify(enviado.contexto);
+    for (const privado of ['viewer-sala-a', 'guest-visitante', 'Ana', 'http://', 'identity']) {
+      expect(semToken).not.toContain(privado);
+    }
+
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    expect(modal.hidden).toBe(true);
+  });
+
+  it('mostra a mensagem de erro do servidor no relato', async () => {
+    await assistir();
+    document.getElementById('reportBug').click();
+    digitar('bugText', 'a imagem congelou ao trocar de tela');
+    fetch.mockImplementationOnce(async () => json({ error: 'Limite de relatos.' }, 429));
+    document.getElementById('bugSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('bugStatus').textContent).toBe('Limite de relatos.'),
+    );
+  });
+
+  it('não oferece denunciar a própria transmissão', async () => {
+    const socket = await entrar();
+    const eu = { id: 'guest-visitante', name: 'Visitante', broadcasting: true };
+    socket.message({ ...estado(), participants: [eu] });
+    socket.message({ type: 'stream-start', slot: 0, userId: eu.id, fonte: 'tela' });
+    document.querySelector('.watch-prompt button').click();
+    socket.message({ type: 'config', slot: 0, config });
+    expect(document.querySelector('.tile-stop')).not.toBeNull();
+    expect(document.querySelector('.tile-report')).toBeNull();
+  });
+
+  it('em Menores envia a denúncia sem nenhum print', async () => {
+    await assistir({ userId: 'bruno' });
+    await vi.advanceTimersByTimeAsync(11_000);
+    const botao = document.querySelector('.tile-report');
+    expect(botao.getAttribute('aria-label')).toBe('Denunciar transmissão');
+    botao.click();
+
+    expect(document.getElementById('reportModal').hidden).toBe(false);
+    expect(document.getElementById('reportNote').textContent).toBe(
+      'Prints dos últimos segundos desta transmissão serão enviados à moderação.',
+    );
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    escolher('menores');
+    expect(document.getElementById('reportNote').textContent).toContain(
+      'Nenhuma imagem será enviada.',
+    );
+    document.getElementById('reportSend').click();
+    await vi.waitFor(() =>
+      expect(document.getElementById('reportStatus').textContent).toBe(
+        'Denúncia enviada. Obrigado.',
+      ),
+    );
+    expect(corpo('/api/relatos/denuncia')).toMatchObject({
+      token: 'viewer-sala-a',
+      slot: 0,
+      categoria: 'menores',
+      prints: [],
+    });
+  });
+
+  it('exige texto em Outro', async () => {
+    await assistir({ userId: 'bruno' });
+    document.querySelector('.tile-report').click();
+    escolher('outro');
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    digitar('reportText', 'abc');
+    expect(document.getElementById('reportSend').disabled).toBe(true);
+    digitar('reportText', 'conteúdo suspeito');
+    expect(document.getElementById('reportSend').disabled).toBe(false);
+  });
+
+  it('guarda no máximo 3 prints por slot, ignora a aba oculta e soma um print na hora', async () => {
+    await assistir({ userId: 'bruno' });
+    await vi.advanceTimersByTimeAsync(5_000 * 8);
+    expect(jpegs).toBe(8);
+
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    await vi.advanceTimersByTimeAsync(5_000 * 4);
+    expect(jpegs).toBe(8);
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+
+    document.querySelector('.tile-report').click();
+    escolher('odio');
+    document.getElementById('reportSend').click();
+    await vi.waitFor(() => expect(chamadas('/api/relatos/denuncia')).toHaveLength(1));
+    // 3 do buffer (os mais recentes) e 1 tirado ao abrir o modal.
+    const { prints } = corpo('/api/relatos/denuncia');
+    expect(prints).toHaveLength(4);
+    for (const p of prints) expect(p).toMatch(/^data:image\/jpeg;base64,/);
+    const textos = prints.map((p) => Buffer.from(p.split(',')[1], 'base64').toString());
+    expect(textos).toEqual(['jpeg-5', 'jpeg-6', 'jpeg-7', 'jpeg-8']);
   });
 });

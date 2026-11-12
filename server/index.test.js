@@ -78,6 +78,22 @@ describe('/api/logs', () => {
     expect(gravar).not.toHaveBeenCalled();
   });
 
+  it('aceita o beacon text/plain que a atividade manda ao ser descarregada', async () => {
+    const resposta = await fetch(`${base}/api/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ level: 'info', message: 'Atividade descarregada', event: 'unload' }),
+    });
+    expect(resposta.status).toBe(200);
+
+    const quebrado = await fetch(`${base}/api/logs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: '{não é json',
+    });
+    expect(quebrado.status).toBe(400);
+  });
+
   it.each([
     { message: { texto: 'inválido' } },
     { message: ' ' },
@@ -274,7 +290,7 @@ describe('/api/session-guest', () => {
       expect(resp.status).toBe(403);
       expect((await resp.json()).error).toMatch(/desativado/);
     } finally {
-      delete process.env.PERMITIR_WEB;
+      process.env.PERMITIR_WEB = '1';
     }
   });
 });

@@ -19,7 +19,7 @@ import {
   fonteIndisponivel,
   opcoesTela,
   pedirDisplayMedia,
-} from '/shared/broadcaster.js?v=13';
+} from '/shared/broadcaster.js?v=16';
 
 const $ = (id) => document.getElementById(id);
 
@@ -95,6 +95,10 @@ function aplicarOpcoes(novas) {
 mostrarQualidade();
 
 const paineis = {};
+// Memória curta para o relato de problema: últimos avisos e últimas métricas.
+const AVISOS_GUARDADOS = 30;
+const avisosRecentes = []; // { fonte, msg, t }
+const ultimosStats = {}; // fonte -> últimas métricas, sem a lista de espectadores
 window.name = 'discord-screen-captura';
 
 function atualizarStatusGlobal() {
@@ -153,7 +157,7 @@ try {
       if (painel && !painel.ativo() && !painel.indisponivel()) {
         painel.verCamera?.();
         painel.setStatus(
-          'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+          'Clique no botão "Ligar a câmera" abaixo para transmitir a webcam.',
           'aviso',
         );
       }
@@ -255,6 +259,21 @@ function chamar(fonte) {
   }, 1200);
 }
 
+// Aba de captura escondida é o que faz o navegador estrangular timers e
+// captura. O diagnóstico vai pela conexão de quem está no ar; sem ninguém no
+// ar não há por onde mandar nem o que diagnosticar.
+let ocultoDesde = null;
+document.addEventListener('visibilitychange', () => {
+  const oculta = document.hidden;
+  const ocultoMs = !oculta && ocultoDesde !== null ? Date.now() - ocultoDesde : null;
+  ocultoDesde = oculta ? (ocultoDesde ?? Date.now()) : null;
+  const painel = FONTES.map((f) => paineis[f]).find((p) => p?.ativo());
+  painel?.diagnosticar('tx-visibilidade', {
+    estado: oculta ? 'hidden' : 'visible',
+    ...(ocultoMs === null ? {} : { ocultoMs }),
+  });
+});
+
 // Visto o recado, para de piscar — o destaque no bloco continua dizendo qual é.
 document.addEventListener('visibilitychange', () => {
   if (document.hidden || !piscando) return;
@@ -311,15 +330,46 @@ function atenderPedido(fonte, novas) {
  */
 let controle = null;
 let religar = null;
+let avisoAtividade = false;
+
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
+let vigiaControle = null;
+
+// Em sala de call a sala é recriada com o MESMO id quando a atividade volta,
+// então "sala fechada" ali é uma pausa, não um fim: a aba espera e tenta de novo.
+const CALL_RELIGAR_MS = 5_000;
+const CALL_JANELA_MS = 10 * 60_000;
+let salaFechadaDesde = null; // quando começou a espera pela sala de call
+
+/** Sala de call? O id vai no token: base64url(JSON).assinatura. */
+function ehSalaDeCall() {
+  const sala = readTokenPayload()?.room;
+  return typeof sala === 'string' && sala.startsWith('call-');
+}
+
+function desistirDaSala() {
+  clearTimeout(religar);
+  religar = 'morto';
+  salaFechadaDesde = null;
+  mostrarControle('Sala encerrada', 'offline');
+  $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
+  $('pageStatus').className = 'status aviso';
+}
 
 function ligarControle() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  controle = new WebSocket(
+  const socket = new WebSocket(
     `${proto}://${location.host}/ws?t=${encodeURIComponent(token)}&modo=controle`,
   );
+  controle = socket;
+  let ultimoRecebido = Date.now();
 
-  controle.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
-  controle.addEventListener('message', (e) => {
+  socket.addEventListener('open', () => mostrarControle('Conectado à sala', 'connected'));
+  socket.addEventListener('message', (e) => {
+    ultimoRecebido = Date.now();
     if (typeof e.data !== 'string') return;
 
     let msg;
@@ -330,6 +380,38 @@ function ligarControle() {
     }
     if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return;
 
+    if (msg.type === 'hb') {
+      // Só vigia depois do primeiro hb: servidor antigo nunca manda, e vigiar
+      // o silêncio dele derrubaria uma conexão saudável.
+      if (!vigiaControle) {
+        vigiaControle = setInterval(() => {
+          if (controle !== socket) {
+            clearInterval(vigiaControle);
+            vigiaControle = null;
+            return;
+          }
+          if (Date.now() - ultimoRecebido < SILENCIO_MAX_MS) return;
+          // O close de um socket meio-aberto pode levar minutos: segue já
+          // para a reconexão, e o guard de aoFecharControle ignora o close real.
+          aoFecharControle(socket);
+          try {
+            socket.close();
+          } catch {
+            /* já fechado */
+          }
+        }, SILENCIO_VERIFICA_MS);
+      }
+      return;
+    }
+
+    // Qualquer coisa além do room-gone prova que a sala voltou.
+    if (salaFechadaDesde !== null && msg.type !== 'room-gone') {
+      salaFechadaDesde = null;
+      mostrarControle('Conectado à sala', 'connected');
+      $('pageStatus').textContent = '';
+      $('pageStatus').className = 'status';
+    }
+
     if (msg.type === 'start-request') {
       window.name = 'discord-screen-captura';
       window.focus();
@@ -339,7 +421,7 @@ function ligarControle() {
         const painel = paineis.camera;
         if (painel && !painel.ativo() && !painel.indisponivel()) {
           painel.setStatus(
-            'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+            'Clique no botão "Ligar a câmera" abaixo para transmitir a webcam.',
             'aviso',
           );
         }
@@ -390,28 +472,68 @@ function ligarControle() {
           // Notificação do sistema indisponível ou bloqueada pelo SO.
         }
       }
+    } else if (msg.type === 'atividade-fechada') {
+      // O Discord fechou a atividade (há máquinas em que basta focar um jogo),
+      // mas a tela segue no ar para quem assiste. Sem este aviso, a pessoa não
+      // teria onde ver que continua transmitindo.
+      mostrarControle('Atividade fechada — você continua ao vivo', 'reconnecting');
+      $('pageStatus').textContent =
+        'O Discord fechou a atividade, mas a transmissão continua para quem está na sala. Reabra a atividade para voltar a assistir, ou pare a transmissão aqui.';
+      $('pageStatus').className = 'status aviso';
+      avisoAtividade = true;
+    } else if (msg.type === 'atividade-voltou') {
+      mostrarControle('Conectado à sala', 'connected');
+      if (avisoAtividade) {
+        $('pageStatus').textContent = '';
+        $('pageStatus').className = 'status';
+        avisoAtividade = false;
+      }
     } else if (msg.type === 'close-request') {
       fecharAba(msg.motivo);
     } else if (msg.type === 'room-gone') {
+      if (ehSalaDeCall()) {
+        salaFechadaDesde ??= Date.now();
+        if (Date.now() - salaFechadaDesde < CALL_JANELA_MS) {
+          mostrarControle('Sala fechada — aguardando a atividade', 'reconnecting');
+          $('pageStatus').textContent =
+            'A sala da call fechou. Esta aba tenta voltar sozinha quando a atividade reabrir.';
+          $('pageStatus').className = 'status aviso';
+          clearTimeout(religar);
+          religar = setTimeout(ligarControle, CALL_RELIGAR_MS);
+          return;
+        }
+      }
       // Sala fechada: não há a quem transmitir, e insistir na reconexão só
       // gastaria rede contra um id que não existe mais.
-      clearTimeout(religar);
-      religar = 'morto';
-      mostrarControle('Sala encerrada', 'offline');
-      $('pageStatus').textContent = 'A sala foi fechada. Volte à atividade e comece de novo.';
-      $('pageStatus').className = 'status aviso';
+      desistirDaSala();
     }
   });
 
   // Sem reconectar, uma queda de rede deixa a aba aberta e surda, sem nada na
   // tela dizendo que ela parou de obedecer à atividade.
-  controle.addEventListener('close', () => {
-    controle = null;
-    if (religar === 'morto') return;
-    mostrarControle('Reconectando à sala', 'reconnecting');
+  socket.addEventListener('close', () => aoFecharControle(socket));
+}
+
+function aoFecharControle(socket) {
+  if (controle !== socket) return;
+  clearInterval(vigiaControle);
+  vigiaControle = null;
+  controle = null;
+  if (religar === 'morto') return;
+  if (salaFechadaDesde !== null) {
+    // O servidor costuma fechar o socket logo após o room-gone: a espera de
+    // call precisa continuar no ritmo dela, e acabar no prazo.
+    if (Date.now() - salaFechadaDesde >= CALL_JANELA_MS) {
+      desistirDaSala();
+      return;
+    }
     clearTimeout(religar);
-    religar = setTimeout(ligarControle, 3000);
-  });
+    religar = setTimeout(ligarControle, CALL_RELIGAR_MS);
+    return;
+  }
+  mostrarControle('Reconectando à sala', 'reconnecting');
+  clearTimeout(religar);
+  religar = setTimeout(ligarControle, 3000);
 }
 
 // ------------------------------------------------------------------ painel
@@ -494,7 +616,7 @@ function criarPainel(fonte) {
       dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia ativa — clique no botão "Ligar a câmera" acima para transmitir.');
+      setStatus('Prévia ativa — clique no botão "Ligar a câmera" abaixo para transmitir.');
       await listarCameras();
     } catch (err) {
       setStatus(
@@ -514,7 +636,7 @@ function criarPainel(fonte) {
       });
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia ativa — clique no botão "Escolher janela ou tela" acima para transmitir.');
+      setStatus('Prévia ativa — clique no botão "Escolher janela ou tela" abaixo para transmitir.');
     } catch (err) {
       // Cancelar o seletor é escolha, não falha.
       if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
@@ -621,6 +743,7 @@ function criarPainel(fonte) {
         );
       },
       onStats: (s) => {
+        ultimosStats[fonte] = { ...s, watchers: undefined };
         el('viewers').textContent = s.viewers;
         el('fps').textContent = `${s.fps} fps`;
         el('fps').title =
@@ -668,6 +791,10 @@ function criarPainel(fonte) {
         }
       },
       onAviso: (msg) => {
+        if (msg) {
+          avisosRecentes.push({ fonte, msg: String(msg).slice(0, 200), t: Date.now() });
+          if (avisosRecentes.length > AVISOS_GUARDADOS) avisosRecentes.shift();
+        }
         if (!msg) {
           if (broadcaster?.getSettings) {
             const s = broadcaster.getSettings();
@@ -678,6 +805,11 @@ function criarPainel(fonte) {
           }
           return;
         }
+        if (msg.startsWith('A captura travou'))
+          broadcaster?.diagnosticar?.('tx-captura-travou', {
+            fonte,
+            gpu: broadcaster?.fabricanteGpu?.() ?? 'desconhecido',
+          });
         if (msg === 'Áudio isolado do Firefox ligado.') {
           $('somAba').textContent = 'Reiniciar áudio do Firefox';
           setStatus(msg, 'ok');
@@ -745,17 +877,20 @@ function criarPainel(fonte) {
       atualizarStatusGlobal();
     } catch (err) {
       broadcaster = null;
+      // Sem isto o selo do cabeçalho continua "Ao Vivo" depois de um seletor
+      // cancelado: ele foi calculado enquanto o broadcaster ainda existia.
+      atualizarStatusGlobal();
       el('start').disabled = false;
       // NotAllowedError quer dizer coisas diferentes nas duas fontes: na tela é
       // quase sempre cancelar o seletor; na câmera é a permissão negada.
       const negado = camera
         ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
-        : 'Você cancelou a seleção de tela. Clique no botão acima para escolher novamente.';
+        : 'Você cancelou a seleção de tela. Clique no botão abaixo para escolher novamente.';
       const msg =
         err.name === 'NotAllowedError'
           ? negado
           : err.name === 'InvalidStateError'
-            ? 'O navegador exige um clique para abrir a tela. Clique no botão "Escolher janela ou tela" acima.'
+            ? 'O navegador exige um clique para abrir a tela. Clique no botão "Escolher janela ou tela" abaixo.'
             : err.message;
       setStatus(msg, err.name === 'NotAllowedError' ? 'aviso' : 'error');
     } finally {
@@ -827,6 +962,7 @@ function criarPainel(fonte) {
     indisponivel: () => Boolean(indisponivel),
     aplicarQualidade: () => broadcaster?.setQuality({ bitrate: opcoes.bitrate, fps: opcoes.fps }),
     ativo: () => Boolean(broadcaster),
+    diagnosticar: (evento, dados) => broadcaster?.diagnosticar?.(evento, dados),
     // Fechar a aba tem que soltar a câmera, esteja ela no ar ou só na prévia.
     parar: () => {
       broadcaster?.stop();
@@ -900,7 +1036,7 @@ if (!payload) {
       });
     }
     paineis.tela?.setStatus(
-      'A transmissão atual continua no ar. Clique no botão acima para selecionar a nova tela.',
+      'A transmissão atual continua no ar. Clique no botão abaixo para selecionar a nova tela.',
       'aviso',
     );
   }
@@ -925,4 +1061,126 @@ $('somAba').addEventListener('click', async () => {
 
 window.addEventListener('beforeunload', () => {
   for (const f of FONTES) paineis[f]?.parar();
+});
+
+// ------------------------------------------------------------- reportar problema
+
+const BUG_MIN = 10;
+let bugEnviando = false;
+let bugEnviado = false;
+let bugFoco = null;
+
+function contextoDoRelato() {
+  const agora = Date.now();
+  return {
+    avisos: avisosRecentes.map((a) => ({
+      fonte: a.fonte,
+      msg: a.msg,
+      haS: Math.round((agora - a.t) / 1000),
+    })),
+    stats: Object.fromEntries(
+      FONTES.filter((f) => paineis[f]?.ativo() && ultimosStats[f]).map((f) => [f, ultimosStats[f]]),
+    ),
+    controle: $('control-status').textContent,
+    fontesAtivas: FONTES.filter((f) => paineis[f]?.ativo()),
+    userAgent: navigator.userAgent.match(/(Chrome|Firefox|Safari|Edg)\/[\d.]+/g)?.join(' ') ?? null,
+    visibilidade: document.visibilityState,
+  };
+}
+
+function atualizarBug() {
+  const n = $('bug-text').value.length;
+  $('bug-count').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bug-count').dataset.state = n < BUG_MIN ? 'curto' : 'ok';
+  $('bug-send').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
+}
+
+function mostrarStatusBug(texto, estado) {
+  $('bug-status').textContent = texto;
+  $('bug-status').className = estado ? `status ${estado}` : 'status';
+}
+
+function abrirBug() {
+  bugFoco = document.activeElement;
+  bugEnviando = false;
+  bugEnviado = false;
+  $('bug-text').value = '';
+  $('bug-text').disabled = false;
+  $('bug-cancel').textContent = 'Cancelar';
+  mostrarStatusBug('');
+  atualizarBug();
+  $('bug-modal').hidden = false;
+  $('bug-text').focus();
+}
+
+function fecharBug() {
+  $('bug-modal').hidden = true;
+  bugFoco?.focus?.();
+}
+
+async function enviarBug() {
+  if ($('bug-send').disabled) return;
+  bugEnviando = true;
+  $('bug-text').disabled = true;
+  $('bug-send').textContent = 'Enviando…';
+  mostrarStatusBug('');
+  atualizarBug();
+  try {
+    const r = await fetch('/api/relatos/bug', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        origem: 'captura',
+        texto: $('bug-text').value.trim(),
+        contexto: contextoDoRelato(),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error ?? `Servidor respondeu ${r.status}.`);
+    bugEnviado = true;
+    mostrarStatusBug(`Recebido! Código ${data.id}`, 'ok');
+    $('bug-cancel').textContent = 'Fechar';
+  } catch (err) {
+    // Só mensagem do servidor ou texto fixo daqui; nada de err.message de rede.
+    mostrarStatusBug(
+      err.name === 'Error' ? err.message : 'Não foi possível falar com o servidor.',
+      'error',
+    );
+    $('bug-text').disabled = false;
+  } finally {
+    bugEnviando = false;
+    $('bug-send').textContent = 'Enviar';
+    atualizarBug();
+  }
+}
+
+$('bug-open').addEventListener('click', abrirBug);
+$('bug-text').addEventListener('input', atualizarBug);
+$('bug-send').addEventListener('click', enviarBug);
+$('bug-cancel').addEventListener('click', fecharBug);
+$('bug-modal').addEventListener('click', (e) => {
+  if (e.target === $('bug-modal')) fecharBug();
+});
+document.addEventListener('keydown', (e) => {
+  if ($('bug-modal').hidden) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    fecharBug();
+    return;
+  }
+  if (e.key !== 'Tab') return;
+  const focaveis = [...$('bug-modal').querySelectorAll('button, textarea')].filter(
+    (el) => !el.disabled,
+  );
+  const primeiro = focaveis[0];
+  const ultimo = focaveis.at(-1);
+  if (e.shiftKey && document.activeElement === primeiro) {
+    e.preventDefault();
+    ultimo?.focus();
+  } else if (!e.shiftKey && document.activeElement === ultimo) {
+    e.preventDefault();
+    primeiro?.focus();
+  }
 });

@@ -24,6 +24,8 @@
     "smoke:controle": "node scripts/smoke-controle.mjs",
     "smoke:audio": "node scripts/smoke-native-audio.mjs",
     "smoke:admin": "node scripts/admin-smoke.mjs",
+    "e2e:resiliencia": "node scripts/e2e-resiliencia.mjs",
+    "e2e:relatos": "node scripts/e2e-relatos.mjs",
     "diagnostico:windows": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/windows-bootstrap.ps1 -Diagnostico",
     "diagnostico:linux": "sh scripts/linux-bootstrap.sh --diagnostico",
     "diagnostico:macos": "sh scripts/macos-bootstrap.sh --diagnostico",
@@ -45,6 +47,7 @@
     "globals": "^17.11.0",
     "jsdom": "^30.0.1",
     "prettier": "^3.9.6",
+    "puppeteer-core": "^25.16.0",
     "vitest": "^4.1.11"
   }
 }

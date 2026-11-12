@@ -46,8 +46,16 @@ const KEYFRAME_EVERY_MS = 3000;
 // Reconexão automática do broadcaster: o viewer já reconectava, mas a aba de
 // captura não — qualquer oscilação de rede matava a transmissão de vez, e a
 // pessoa tinha que escolher a tela de novo.
-const MAX_RECONNECT_ATTEMPTS = 30;
+// Teto de 5s e 60 tentativas: insiste os mesmos ~5 min, mas volta ao ar mais
+// cedo quando a queda é curta.
+const MAX_RECONNECT_ATTEMPTS = 60;
 const RECONNECT_BASE_MS = 1000;
+const RECONNECT_MAX_MS = 5000;
+
+// O servidor manda {"type":"hb"} a cada 10s. O ping de protocolo é invisível
+// ao JS, então só o hb permite perceber um socket meio-aberto (half-open).
+const SILENCIO_MAX_MS = 25_000;
+const SILENCIO_VERIFICA_MS = 5_000;
 
 // Keepalive: mantém a conexão viva através de proxies e load balancers que
 // matam sockets ociosos. O servidor ignora o pacote; a utilidade é manter
@@ -208,6 +216,57 @@ export function fonteIndisponivel(fonte) {
     : 'Este navegador não permite captura de tela. Navegador de celular não suporta captura — use um desktop.';
 }
 
+export const CAPTURA_PARADA_MS = 15_000;
+export const AVISO_TRAVAMENTO_INTERVALO_MS = 5 * 60_000;
+
+let cacheFabricanteGpu = null;
+
+export function _limparCacheGpu() {
+  cacheFabricanteGpu = null;
+}
+
+export function detectarFabricanteGpu() {
+  if (cacheFabricanteGpu !== null) return cacheFabricanteGpu;
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    if (!gl || typeof gl.getParameter !== 'function') {
+      cacheFabricanteGpu = 'desconhecido';
+      return cacheFabricanteGpu;
+    }
+    const ext =
+      typeof gl.getExtension === 'function' ? gl.getExtension('WEBGL_debug_renderer_info') : null;
+    const param = ext ? ext.UNMASKED_RENDERER_WEBGL : null;
+    let renderer = param && typeof gl.getParameter === 'function' ? gl.getParameter(param) : null;
+    if (!renderer && typeof gl.getParameter === 'function') {
+      renderer = gl.getParameter(gl.RENDERER ?? 0x1f01);
+    }
+    const str = String(renderer ?? '');
+    if (/nvidia|geforce|quadro|rtx|gtx/i.test(str)) {
+      cacheFabricanteGpu = 'nvidia';
+    } else if (/amd|radeon|\bati\b/i.test(str)) {
+      cacheFabricanteGpu = 'amd';
+    } else if (/intel/i.test(str)) {
+      cacheFabricanteGpu = 'intel';
+    } else {
+      cacheFabricanteGpu = 'desconhecido';
+    }
+  } catch {
+    cacheFabricanteGpu = 'desconhecido';
+  }
+  return cacheFabricanteGpu;
+}
+
+export function mensagemTravamento(fabricante) {
+  if (fabricante === 'nvidia') {
+    return 'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.';
+  }
+  if (fabricante === 'amd') {
+    return 'A captura travou: o jogo parou de entregar quadros. Placa AMD: rode o jogo em "Janela sem bordas" (borderless) em vez de tela cheia exclusiva. Se continuar, desligue o Radeon Anti-Lag e o Radeon Chill para esse jogo no AMD Software.';
+  }
+  return 'A captura travou: o jogo parou de entregar quadros. Rode o jogo em "Janela sem bordas" (borderless) em vez de tela cheia exclusiva e reabra a transmissão.';
+}
+
 /**
  * @param {object} opts
  * @param {string} opts.wsUrl        endpoint do relay, com o token de transmissor
@@ -258,6 +317,7 @@ export function createBroadcaster({
   let ultimoQuadroAt = 0;
   let idleTimer = null;
   let avisoTravamentoAtivo = false;
+  let ultimoAvisoTravamentoAt = 0;
 
   let running = false;
   // Null até o servidor atribuir de fato. Usar 0 como provisório fazia o
@@ -285,6 +345,17 @@ export function createBroadcaster({
   let displaySurface = null;
   let reconnectAttempts = 0;
   let reconnectTimer = null;
+  let quedaEm = 0;
+  // Diagnóstico para o servidor. Pronto só depois do 'slot', porque antes disso
+  // a conexão ainda pode ser recusada; o que nasce fora do ar espera na fila e
+  // sai quando o socket volta, com os mais antigos perdendo a vaga.
+  const DIAG_FILA_MAX = 20;
+  const filaDiag = [];
+  let diagPronto = false;
+  let diagTimer = null;
+  let diagDesde = 0;
+  let diagQuadros = 0;
+  let diagDescartados = 0;
   let keepaliveTimer = null;
   // Guarda a config e audioConfig mais recentes para reenviar após reconexão.
   let lastSentConfig = null;
@@ -337,6 +408,44 @@ export function createBroadcaster({
     }
   }
 
+  function diagnosticar(evento, dados = {}) {
+    const msg = JSON.stringify({ type: 'diagnostic', event: evento, dados });
+    if (diagPronto && ws?.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(msg);
+        return;
+      } catch {
+        /* caiu entre a checagem e o envio: vai para a fila */
+      }
+    }
+    filaDiag.push(msg);
+    if (filaDiag.length > DIAG_FILA_MAX) filaDiag.shift();
+  }
+
+  function esvaziarDiag() {
+    diagPronto = true;
+    while (filaDiag.length && ws?.readyState === WebSocket.OPEN) ws.send(filaDiag.shift());
+  }
+
+  function diagnosticarCodec() {
+    diagnosticar('tx-codec', {
+      codec: config.codec,
+      w: config.width,
+      h: config.height,
+      fps,
+      bitrate: config.bitrate,
+      hardware: config.hardwareAcceleration === 'prefer-hardware',
+    });
+  }
+
+  function diagnosticarFimDaCaptura() {
+    diagnosticar('tx-captura-fim', {
+      motivo: 'faixa-ended',
+      fonte,
+      superficie: displaySurface ?? 'desconhecida',
+    });
+  }
+
   function createEncoder() {
     if (encoder && encoder.state !== 'closed') {
       try {
@@ -349,10 +458,12 @@ export function createBroadcaster({
       output: onEncoded,
       error: (err) => {
         console.warn(`[encoder error] ${err.message}, recriando...`);
+        diagnosticar('tx-erro', { origem: 'video', nome: err?.name ?? 'Error' });
       },
     });
     encoder.configure(config);
     wantKeyframe = true;
+    diagnosticarCodec();
   }
 
   async function start() {
@@ -364,6 +475,7 @@ export function createBroadcaster({
     displaySurface = track.getSettings?.().displaySurface ?? null;
     track.contentHint = 'motion';
     track.addEventListener('ended', () => {
+      diagnosticarFimDaCaptura();
       if (onTrackEnded) {
         onTrackEnded();
       } else {
@@ -428,12 +540,34 @@ export function createBroadcaster({
         mbps: (bytes * 8) / 1e6,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
       });
+      diagQuadros += frames;
+      diagDescartados += encoderDrops + networkDrops;
       bytes = 0;
       frames = 0;
       capturedFrames = 0;
       encoderDrops = 0;
       networkDrops = 0;
     }, 1000);
+
+    diagDesde = Date.now();
+    diagQuadros = 0;
+    diagDescartados = 0;
+    diagTimer = setInterval(() => {
+      const agora = Date.now();
+      diagnosticar('tx-saude', {
+        fps: Math.round(diagQuadros / Math.max(1, (agora - diagDesde) / 1000)),
+        bitrate,
+        w: config?.width ?? 0,
+        h: config?.height ?? 0,
+        viewers,
+        quadrosDescartados: diagDescartados,
+        filaEncoder: encoder?.encodeQueueSize ?? 0,
+        bufferedKB: Math.round((ws?.bufferedAmount ?? 0) / 1024),
+      });
+      diagDesde = agora;
+      diagQuadros = 0;
+      diagDescartados = 0;
+    }, 60_000);
 
     startAntiSleep();
     pump(track);
@@ -713,7 +847,10 @@ export function createBroadcaster({
       audioEncoder = new AudioEncoder({
         output: onAudioEncoded,
         // Som é acessório: se o encoder cair, a tela continua no ar.
-        error: (err) => console.warn('[audio encoder]', err.message),
+        error: (err) => {
+          console.warn('[audio encoder]', err.message);
+          diagnosticar('tx-erro', { origem: 'audio', nome: err?.name ?? 'Error' });
+        },
       });
       audioEncoder.configure({
         codec: 'opus',
@@ -817,6 +954,17 @@ export function createBroadcaster({
 
   // ------------------------------------------------------------------ captura
 
+  function dispararAvisoTravamento() {
+    if (!running) return;
+    if (displaySurface === 'window' || capturedFrames > 10) return;
+    const now = Date.now();
+    if (now - ultimoAvisoTravamentoAt < AVISO_TRAVAMENTO_INTERVALO_MS) return;
+    ultimoAvisoTravamentoAt = now;
+    avisoTravamentoAtivo = true;
+    onAviso?.(mensagemTravamento(detectarFabricanteGpu()));
+    console.error('Captura de vídeo parou de emitir quadros.');
+  }
+
   function pump(track) {
     if (window.MediaStreamTrackProcessor) pumpDirect(track);
     else pumpViaVideo();
@@ -826,21 +974,13 @@ export function createBroadcaster({
   async function pumpDirect(track) {
     reader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     let frameTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      if (displaySurface === 'window' || capturedFrames > 10) return;
-      avisoTravamentoAtivo = true;
-      onAviso?.(
-        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
-      );
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
+    const alertStuck = () => dispararAvisoTravamento();
 
     while (running) {
       let frame;
       try {
         clearTimeout(frameTimeout);
-        frameTimeout = setTimeout(alertStuck, 5000);
+        frameTimeout = setTimeout(alertStuck, CAPTURA_PARADA_MS);
 
         const { done, value } = await reader.read();
 
@@ -894,20 +1034,12 @@ export function createBroadcaster({
     };
 
     let tickTimeout = null;
-    const alertStuck = () => {
-      if (!running) return;
-      if (displaySurface === 'window' || capturedFrames > 10) return;
-      avisoTravamentoAtivo = true;
-      onAviso?.(
-        'A captura travou: o driver de vídeo parou de entregar quadros do jogo. Placa NVIDIA: no Painel de Controle NVIDIA, em Gerenciar configurações 3D, mude "Método de apresentação Vulkan/OpenGL" para "Preferir em camadas no DXGI Swapchain" e reabra o jogo. Detalhes no CORRIGIR_TRANSMISSAO_JOGOS.bat.',
-      );
-      console.error('Captura de vídeo parou de emitir quadros.');
-    };
+    const alertStuck = () => dispararAvisoTravamento();
 
     const tick = () => {
       if (!running) return;
       clearTimeout(tickTimeout);
-      tickTimeout = setTimeout(alertStuck, 5000);
+      tickTimeout = setTimeout(alertStuck, CAPTURA_PARADA_MS);
 
       if (video.paused) video.play()?.catch?.(() => {});
       if (video.readyState < 2 || !video.videoWidth) return rescheduleFallback();
@@ -1138,6 +1270,12 @@ export function createBroadcaster({
         direct: Boolean(window.MediaStreamTrackProcessor),
         captureFps: source.frameRate ?? null,
       });
+      diagnosticar('tx-qualidade', {
+        motivo: 'desempenho',
+        bitrate,
+        w: config.width,
+        h: config.height,
+      });
       onAviso?.(
         `Desempenho ajustado para ${target.width}×${target.height} para manter a transmissão fluida.`,
       );
@@ -1171,6 +1309,12 @@ export function createBroadcaster({
       config = { ...config, bitrate };
       encoder?.configure?.(config);
       wantKeyframe = true;
+      diagnosticar('tx-qualidade', {
+        motivo: 'recuperou',
+        bitrate,
+        w: config.width,
+        h: config.height,
+      });
       onAviso?.(
         `A rede estabilizou; a qualidade subiu para ${(bitrate / 1_000_000).toFixed(1)} Mb/s.`,
       );
@@ -1189,6 +1333,7 @@ export function createBroadcaster({
     config = { ...config, bitrate };
     encoder?.configure?.(config);
     wantKeyframe = true;
+    diagnosticar('tx-qualidade', { motivo: 'rede', bitrate, w: config.width, h: config.height });
     onAviso?.(
       `A rede ficou congestionada; o bitrate foi ajustado para ${(bitrate / 1_000_000).toFixed(1)} Mb/s para evitar travamentos.`,
     );
@@ -1298,11 +1443,16 @@ export function createBroadcaster({
 
   // ---------------------------------------------------------------- websocket
 
+  let vigiaTimer = null;
+  let ultimoRecebido = 0;
+  const abandonados = new WeakSet(); // sockets que o vigia já deu por mortos
+
   function connect() {
     return new Promise((resolve, reject) => {
       mySlot = null;
       ws = new WebSocket(wsUrl);
       ws.binaryType = 'arraybuffer';
+      const socket = ws;
       let abriu = false;
       let resolvido = false;
 
@@ -1312,6 +1462,7 @@ export function createBroadcaster({
         clearTimeout(timeout);
         reconnectAttempts = 0;
         startKeepalive();
+        esvaziarDiag();
         resolve();
       };
 
@@ -1337,9 +1488,14 @@ export function createBroadcaster({
       });
 
       ws.addEventListener('message', (e) => {
+        ultimoRecebido = Date.now();
         if (typeof e.data !== 'string') return;
         const msg = JSON.parse(e.data);
 
+        if (msg.type === 'hb') {
+          armarVigia(socket);
+          return;
+        }
         if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
           mySlot = msg.slot;
           pronto();
@@ -1381,6 +1537,8 @@ export function createBroadcaster({
       });
 
       ws.addEventListener('close', (e) => {
+        // O vigia já cuidou da queda e abriu outra reconexão.
+        if (abandonados.has(socket)) return;
         clearTimeout(timeout);
         stopKeepalive();
         if (e?.code === 4001) {
@@ -1406,8 +1564,14 @@ export function createBroadcaster({
       return;
     }
 
+    if (reconnectAttempts === 0) quedaEm = Date.now();
     reconnectAttempts++;
-    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1), 10_000);
+    const delay = Math.min(
+      RECONNECT_BASE_MS * Math.pow(2, reconnectAttempts - 1),
+      RECONNECT_MAX_MS,
+    );
+    diagPronto = false;
+    diagnosticar('tx-reconexao', { tentativa: reconnectAttempts, atrasoMs: delay });
     onAviso?.(
       `Conexão caiu. Reconectando em ${Math.ceil(delay / 1000)}s… (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`,
     );
@@ -1421,6 +1585,7 @@ export function createBroadcaster({
           : `${wsUrl}${wsUrl.includes('?') ? '&' : '?'}substituir=1`;
         ws = new WebSocket(reconnectUrl);
         ws.binaryType = 'arraybuffer';
+        const socket = ws;
 
         await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => {
@@ -1433,8 +1598,13 @@ export function createBroadcaster({
           });
 
           ws.addEventListener('message', (e) => {
+            ultimoRecebido = Date.now();
             if (typeof e.data !== 'string') return;
             const msg = JSON.parse(e.data);
+            if (msg.type === 'hb') {
+              armarVigia(socket);
+              return;
+            }
             if (msg.type === 'slot' && Number.isInteger(msg.slot)) {
               mySlot = msg.slot;
               clearTimeout(timeout);
@@ -1471,6 +1641,7 @@ export function createBroadcaster({
 
           ws.addEventListener('error', () => reject(new Error('Falha na reconexão.')));
           ws.addEventListener('close', (e) => {
+            if (abandonados.has(socket)) return;
             stopKeepalive();
             if (e?.code === 4001) {
               stop('Transmissão substituída pela nova aba.');
@@ -1490,8 +1661,15 @@ export function createBroadcaster({
         });
 
         // Reconectou com sucesso.
+        const tentativas = reconnectAttempts;
         reconnectAttempts = 0;
         startKeepalive();
+        esvaziarDiag();
+        diagnosticar('tx-reconexao', {
+          ok: true,
+          tentativas,
+          foraMs: Date.now() - quedaEm,
+        });
 
         // Reestabelece a transmissão no servidor.
         ws.send(JSON.stringify({ type: 'start' }));
@@ -1505,6 +1683,7 @@ export function createBroadcaster({
 
         // Reconecta o handler de close para futuras quedas.
         ws.addEventListener('close', () => {
+          if (abandonados.has(socket)) return;
           stopKeepalive();
           if (running) attemptReconnect();
         });
@@ -1529,6 +1708,36 @@ export function createBroadcaster({
   function stopKeepalive() {
     clearInterval(keepaliveTimer);
     keepaliveTimer = null;
+    // O vigia vive e morre com a conexão, como o keepalive.
+    clearInterval(vigiaTimer);
+    vigiaTimer = null;
+  }
+
+  /**
+   * Só arma depois do primeiro hb: servidor antigo nunca manda hb, e vigiar
+   * esse silêncio derrubaria uma conexão saudável. Silêncio é não receber
+   * NENHUMA mensagem (texto ou binária) por SILENCIO_MAX_MS.
+   */
+  function armarVigia(socket) {
+    if (vigiaTimer) return;
+    vigiaTimer = setInterval(() => {
+      if (ws !== socket || abandonados.has(socket)) {
+        clearInterval(vigiaTimer);
+        vigiaTimer = null;
+        return;
+      }
+      if (Date.now() - ultimoRecebido < SILENCIO_MAX_MS) return;
+      // Num socket meio-aberto o close do navegador pode levar minutos. O
+      // socket é abandonado antes, para o close tardio não reconectar de novo.
+      abandonados.add(socket);
+      stopKeepalive();
+      attemptReconnect();
+      try {
+        socket.close();
+      } catch {
+        /* já fechado */
+      }
+    }, SILENCIO_VERIFICA_MS);
   }
 
   // -------------------------------------------------------------------- parar
@@ -1557,6 +1766,7 @@ export function createBroadcaster({
       await track.applyConstraints?.(captureConstraints(fps)).catch(() => {});
       track.contentHint = 'motion';
       track.addEventListener('ended', () => {
+        diagnosticarFimDaCaptura();
         if (onTrackEnded) {
           onTrackEnded();
         } else {
@@ -1677,6 +1887,8 @@ export function createBroadcaster({
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
     reconnectAttempts = 0;
+    clearInterval(diagTimer);
+    diagTimer = null;
     stopKeepalive();
     stopIdleHeartbeat();
     if (typeof ultimoQuadro?.close === 'function') {
@@ -1731,5 +1943,7 @@ export function createBroadcaster({
     temSom: () => Boolean(audioEncoder || nativeAudio),
     somBloqueado: () => somBloqueado,
     isRunning: () => running,
+    diagnosticar,
+    fabricanteGpu: () => detectarFabricanteGpu(),
   };
 }

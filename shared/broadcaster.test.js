@@ -11,8 +11,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  _limparCacheGpu,
   createBroadcaster,
+  detectarFabricanteGpu,
   fonteIndisponivel,
+  mensagemTravamento,
   opcoesTela,
   pedirDisplayMedia,
   supportError,
@@ -338,6 +341,7 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  _limparCacheGpu();
   encoders = [];
   audioEncoders = [];
   sockets = [];
@@ -359,6 +363,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  _limparCacheGpu();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -683,6 +688,95 @@ describe('conexão', () => {
     expect(b.isRunning()).toBe(false);
   });
 
+  describe('vigia de silêncio', () => {
+    async function noArComRelogio(extra = {}) {
+      vi.useFakeTimers();
+      prepararCaptura(telaSimples());
+      const b = createBroadcaster(opcoes(extra));
+      const promessa = b.start();
+      await vi.advanceTimersByTimeAsync(0);
+      sockets.at(-1).abrir();
+      await promessa;
+      return { b, ws: sockets.at(-1) };
+    }
+
+    afterEach(() => vi.useRealTimers());
+
+    it('depois de um hb, 25s de silêncio disparam exatamente uma reconexão', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.receber({ type: 'hb' });
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(ws.fechado).toBe(true);
+      // O close tardio do socket abandonado não pode abrir uma segunda reconexão.
+      ws.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sockets).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(sockets).toHaveLength(2);
+      b.stop();
+    });
+
+    it('qualquer mensagem, inclusive binária, adia o silêncio', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.receber({ type: 'hb' });
+      await vi.advanceTimersByTimeAsync(20_000);
+      ws.disparar('message', { data: new ArrayBuffer(4) });
+      await vi.advanceTimersByTimeAsync(20_000);
+
+      expect(ws.fechado).toBe(false);
+      b.stop();
+    });
+
+    it('sem hb nada acontece, por mais longo que seja o silêncio', async () => {
+      const { b, ws } = await noArComRelogio();
+
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(ws.fechado).toBe(false);
+      expect(sockets).toHaveLength(1);
+      expect(b.isRunning()).toBe(true);
+      b.stop();
+    });
+
+    it('também vigia o socket aberto pela reconexão', async () => {
+      const { b, ws } = await noArComRelogio();
+      ws.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      const novo = sockets.at(-1);
+      novo.abrir();
+      await vi.advanceTimersByTimeAsync(0);
+      novo.receber({ type: 'hb' });
+
+      await vi.advanceTimersByTimeAsync(25_000);
+      expect(novo.fechado).toBe(true);
+      novo.disparar('close');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(sockets).toHaveLength(3);
+      b.stop();
+    });
+
+    it('o atraso do backoff nunca passa de 5s', async () => {
+      const onAviso = vi.fn();
+      const { b, ws } = await noArComRelogio({ onAviso });
+      ws.disparar('close');
+      for (let i = 0; i < 8; i++) {
+        await vi.advanceTimersByTimeAsync(5000);
+        sockets.at(-1).disparar('error');
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      const atrasos = onAviso.mock.calls
+        .map(([m]) => /em (\d+)s/.exec(m)?.[1])
+        .filter(Boolean)
+        .map(Number);
+      expect(atrasos.slice(0, 5)).toEqual([1, 2, 4, 5, 5]);
+      expect(Math.max(...atrasos)).toBe(5);
+      b.stop();
+    });
+  });
+
   it('ignora o que chega no socket e não é texto', async () => {
     const { b, ws } = await noAr();
 
@@ -976,10 +1070,43 @@ describe('quadros', () => {
       processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
       await vi.advanceTimersByTimeAsync(0);
 
-      // Espera 6 segundos sem nenhum novo quadro chegar (simulando Alt-Tab)
-      await vi.advanceTimersByTimeAsync(6000);
+      // Espera 16 segundos sem nenhum novo quadro chegar (simulando Alt-Tab)
+      await vi.advanceTimersByTimeAsync(16_000);
 
       expect(onAviso).not.toHaveBeenCalledWith(expect.stringMatching(/driver de vídeo parou/));
+      b.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('depois do primeiro aviso, uma nova parada dentro de 5 min não gera um segundo aviso de captura travada', async () => {
+    const onAviso = vi.fn();
+    const stream = telaSimples({ width: 1280, height: 720, displaySurface: 'monitor' });
+    const { b } = await noAr({ onAviso }, stream);
+
+    vi.useFakeTimers();
+    try {
+      processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Espera 15 segundos sem novos quadros: primeiro aviso dispara
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/^A captura travou/));
+      expect(onAviso).toHaveBeenCalledTimes(1);
+
+      // Chega um novo quadro: limpa o aviso
+      processadorDe(stream.getVideoTracks()[0]).empurrar(quadro());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onAviso).toHaveBeenLastCalledWith(null);
+
+      // Nova parada de 15 segundos em menos de 5 minutos do primeiro aviso
+      await vi.advanceTimersByTimeAsync(15_000);
+      const chamadasTravamento = onAviso.mock.calls.filter(
+        ([msg]) => typeof msg === 'string' && msg.startsWith('A captura travou'),
+      );
+      expect(chamadasTravamento).toHaveLength(1);
+
       b.stop();
     } finally {
       vi.useRealTimers();
@@ -1524,5 +1651,162 @@ describe('sem MediaStreamTrackProcessor', () => {
     expect(ws.mensagens().some((m) => m.type === 'native-audio-start')).toBe(false);
     expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/computador.*INICIAR/i));
     b.stop();
+  });
+});
+
+describe('diagnóstico do transmissor', () => {
+  const diagnosticos = (ws, evento) =>
+    ws.mensagens().filter((m) => m.type === 'diagnostic' && m.event === evento);
+
+  async function noArComRelogio(extra = {}) {
+    vi.useFakeTimers();
+    prepararCaptura(telaSimples());
+    const b = createBroadcaster(opcoes(extra));
+    const promessa = b.start();
+    await vi.advanceTimersByTimeAsync(0);
+    sockets.at(-1).abrir();
+    await promessa;
+    return { b, ws: sockets.at(-1) };
+  }
+
+  afterEach(() => vi.useRealTimers());
+
+  it('informa o codec quando o encoder é configurado', async () => {
+    const { b, ws } = await noArComRelogio();
+
+    const [codec] = diagnosticos(ws, 'tx-codec');
+    expect(codec.dados).toMatchObject({ hardware: true, w: expect.any(Number) });
+    expect(codec.dados.codec).toMatch(/^avc1/);
+    b.stop();
+  });
+
+  it('o que nasce antes do slot espera na fila e sai quando o socket fica pronto', async () => {
+    vi.useFakeTimers();
+    prepararCaptura(telaSimples());
+    const b = createBroadcaster(opcoes());
+    const promessa = b.start();
+    await vi.advanceTimersByTimeAsync(0);
+    const ws = sockets.at(-1);
+    for (let i = 0; i < 25; i++) b.diagnosticar('tx-erro', { i });
+    expect(ws.mensagens().filter((m) => m.type === 'diagnostic')).toHaveLength(0);
+
+    ws.abrir();
+    await promessa;
+
+    const erros = diagnosticos(ws, 'tx-erro');
+    expect(erros).toHaveLength(20);
+    expect(erros[0].dados.i).toBe(5);
+    expect(erros.at(-1).dados.i).toBe(24);
+    b.stop();
+  });
+
+  it('informa cada tentativa de reconexão e o sucesso, com o tempo fora', async () => {
+    const { b, ws } = await noArComRelogio();
+    ws.disparar('close');
+    await vi.advanceTimersByTimeAsync(1000);
+    sockets.at(-1).disparar('error');
+    await vi.advanceTimersByTimeAsync(2000);
+    const novo = sockets.at(-1);
+    novo.abrir();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(diagnosticos(novo, 'tx-reconexao').map((m) => m.dados)).toEqual([
+      { tentativa: 1, atrasoMs: 1000 },
+      { tentativa: 2, atrasoMs: 2000 },
+      { ok: true, tentativas: 2, foraMs: 3000 },
+    ]);
+    b.stop();
+  });
+
+  it('informa a saúde a cada 60s enquanto transmite, e para ao encerrar', async () => {
+    const { b, ws } = await noArComRelogio();
+    ws.receber({ type: 'state', viewers: 2, streams: [] });
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    const [saude] = diagnosticos(ws, 'tx-saude');
+    expect(saude.dados).toMatchObject({
+      viewers: 2,
+      quadrosDescartados: 0,
+      filaEncoder: 0,
+      bufferedKB: 0,
+    });
+    for (const campo of ['fps', 'bitrate', 'w', 'h']) {
+      expect(typeof saude.dados[campo]).toBe('number');
+    }
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(diagnosticos(ws, 'tx-saude')).toHaveLength(2);
+
+    b.stop();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(diagnosticos(ws, 'tx-saude')).toHaveLength(2);
+  });
+
+  it('informa o fim da captura quando a faixa termina', async () => {
+    const { b, ws, stream } = await noAr();
+
+    stream.getVideoTracks()[0].disparar('ended');
+
+    expect(diagnosticos(ws, 'tx-captura-fim')).toHaveLength(1);
+    expect(b.isRunning()).toBe(false);
+  });
+});
+
+describe('mensagemTravamento', () => {
+  it('gera mensagens com prefixo obrigatório e orientações por fabricante', () => {
+    const amd = mensagemTravamento('amd');
+    expect(amd.startsWith('A captura travou')).toBe(true);
+    expect(amd).toContain('AMD');
+
+    const nvidia = mensagemTravamento('nvidia');
+    expect(nvidia.startsWith('A captura travou')).toBe(true);
+    expect(nvidia).toContain('NVIDIA');
+
+    const desc = mensagemTravamento('desconhecido');
+    expect(desc.startsWith('A captura travou')).toBe(true);
+    expect(desc).not.toContain('NVIDIA');
+  });
+});
+
+describe('detectarFabricanteGpu', () => {
+  it('devolve desconhecido quando getContext devolve null', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    expect(detectarFabricanteGpu()).toBe('desconhecido');
+  });
+
+  it('classifica fornecedores de GPU e armazena resultado em cache', () => {
+    let rendererMock = 'NVIDIA GeForce RTX 3080';
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((type) => {
+      if (type === 'webgl' || type === 'experimental-webgl') {
+        return {
+          getExtension: (name) =>
+            name === 'WEBGL_debug_renderer_info' ? { UNMASKED_RENDERER_WEBGL: 0x9246 } : null,
+          getParameter: (param) => (param === 0x9246 ? rendererMock : null),
+        };
+      }
+      return null;
+    });
+
+    expect(detectarFabricanteGpu()).toBe('nvidia');
+
+    // Comprovando cache do módulo: alterar rendererMock sem limpar cache mantém 'nvidia'
+    rendererMock = 'AMD Radeon RX 6700';
+    expect(detectarFabricanteGpu()).toBe('nvidia');
+
+    _limparCacheGpu();
+    expect(detectarFabricanteGpu()).toBe('amd');
+
+    _limparCacheGpu();
+    rendererMock = 'Intel(R) Iris(R) Xe';
+    expect(detectarFabricanteGpu()).toBe('intel');
+
+    _limparCacheGpu();
+    rendererMock = 'Outra GPU Desconhecida';
+    expect(detectarFabricanteGpu()).toBe('desconhecido');
+  });
+
+  it('o broadcaster expõe fabricanteGpu', () => {
+    const b = createBroadcaster(opcoes());
+    expect(b.fabricanteGpu()).toBe(detectarFabricanteGpu());
   });
 });

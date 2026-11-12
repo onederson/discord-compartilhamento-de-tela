@@ -7,7 +7,15 @@
  * o módulo já foi avaliado. Daí um arquivo de preparação, que o Vitest roda
  * antes de importar o teste.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 process.env.NODE_ENV = 'test';
+
+// Relatos e bloqueios em pasta descartável: um teste que importa o servidor não
+// pode deixar uma .dados de mentira dentro do repositório.
+process.env.RELATOS_DIR ??= fs.mkdtempSync(path.join(os.tmpdir(), 'relatos-teste-'));
 
 /**
  * O `.env` da máquina não entra no teste.
@@ -25,10 +33,12 @@ for (const chave of [
   'DISCORD_CLIENT_SECRET',
   'DISCORD_BOT_TOKEN',
   'DISCORD_ADMIN_ID',
+  'DISCORD_GUILD_ID',
   'PUBLIC_ORIGIN',
 ]) {
   process.env[chave] = '';
 }
+process.env.PERMITIR_WEB = '1';
 process.env.SESSION_SECRET ??= 'segredo-de-teste-com-mais-de-trinta-e-dois-caracteres';
 // Porta 0: o sistema escolhe uma livre, e dois arquivos de teste rodando ao
 // mesmo tempo não brigam por ela.

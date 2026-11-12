@@ -606,6 +606,35 @@ describe('pushChunk', () => {
       expect(room.droppedChunks).toBe(1);
     });
 
+    it('depois de perder um delta, só volta a receber vídeo a partir do próximo keyframe', () => {
+      const { room, entry, lento } = entupido(3 * 1024 * 1024);
+      lento.__primed.add(entry.slot);
+
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+      lento.bufferedAmount = 0; // a fila esvaziou
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+      expect(lento.binarios()).toHaveLength(0);
+
+      R.pushChunk(room, entry, quadro(entry.slot, KEYFRAME));
+      R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+      expect(lento.binarios()).toHaveLength(2);
+    });
+
+    it('o atraso de um espectador não pede keyframe nem tira quadro de quem acompanha', () => {
+      const { room, entry, lento } = entupido(3 * 1024 * 1024);
+      lento.__primed.add(entry.slot);
+      const rapido = socket();
+      R.attachViewer(room, rapido, pessoa('rapido'));
+      R.watch(room, rapido, entry.slot);
+      rapido.__primed.add(entry.slot);
+      entry.ws.limpar();
+
+      for (let i = 0; i < 3; i++) R.pushChunk(room, entry, quadro(entry.slot, DELTA));
+
+      expect(rapido.binarios()).toHaveLength(3);
+      expect(entry.ws.tipos()).not.toContain('need-keyframe');
+    });
+
     it('avisa o transmissor quando o relay descarta quadros de um espectador lento', () => {
       const { room, entry, lento } = entupido(3 * 1024 * 1024);
       lento.__primed.add(entry.slot);

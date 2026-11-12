@@ -13,7 +13,11 @@ vi.spyOn(console, 'log').mockImplementation(() => {});
 vi.spyOn(console, 'warn').mockImplementation(() => {});
 vi.spyOn(console, 'error').mockImplementation(() => {});
 
-const { server, wss } = await import('./index.js');
+// Carência curta só para o teste não esperar os 15s reais.
+const GRACA_MS = 300;
+process.env.VIEWER_GRACE_MS = String(GRACA_MS);
+
+const { server, wss, sanearDadosCliente, registrarDiagnosticoCliente } = await import('./index.js');
 const { signToken } = await import('./tokens.js');
 const R = await import('./rooms.js');
 if (!server.listening) await new Promise((pronto) => server.once('listening', pronto));
@@ -536,7 +540,7 @@ describe('espectador', () => {
     ).toBeTruthy();
   });
 
-  it('ao desconectar o viewer da atividade, a transmissão da pessoa é derrubada na hora e a aba de controle recebe close-request', async () => {
+  it('ao desconectar o viewer da atividade, a transmissão é derrubada e a aba recebe close-request só depois da carência', async () => {
     const room = novaSala();
     const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
     await ate(transmissor, doTipo('slot'), 'o slot');
@@ -546,11 +550,37 @@ describe('espectador', () => {
 
     naActivity.close();
 
-    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    // Logo após a queda nada é derrubado: a atividade ainda pode reconectar.
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS / 3));
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada após a carência')).toBeTruthy();
     expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
   });
 
-  it('ao chamar a rota /api/rooms/leave, as transmissões e abas de controle da pessoa são encerradas imediatamente', async () => {
+  it('se a atividade reconectar dentro da carência, a transmissão e a aba de captura continuam', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    naActivity.close();
+    await fechou(naActivity);
+    const reconectada = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(reconectada, doTipo('state'), 'o estado após reconectar');
+
+    // Espera a carência original passar com folga.
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS * 2));
+
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+    expect(room.broadcasters.size).toBe(1);
+  });
+
+  it('a rota /api/rooms/leave respeita a carência e encerra só se a atividade não voltar', async () => {
     const room = novaSala();
     const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
     await ate(transmissor, doTipo('slot'), 'o slot');
@@ -564,8 +594,124 @@ describe('espectador', () => {
       body: JSON.stringify({ token: tokenDe(room.id, 'viewer', 'u1') }),
     });
     expect(res.status).toBe(200);
+    naActivity.close();
 
-    expect(await ate(transmissor, doTipo('stop-request'), 'a parada imediata')).toBeTruthy();
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS / 3));
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+
+    expect(await ate(transmissor, doTipo('stop-request'), 'a parada após a carência')).toBeTruthy();
     expect(await ate(aba, doTipo('close-request'), 'o fechamento da aba de controle')).toBeTruthy();
+  });
+
+  it('o Discord recriando o iframe (beacon de saída + reconexão) não derruba quem está jogando', async () => {
+    const room = novaSala();
+    const transmissor = await conectar(tokenDe(room.id, 'broadcaster', 'u1'));
+    await ate(transmissor, doTipo('slot'), 'o slot');
+    const aba = await comoControle(room, 'u1');
+    const naActivity = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(naActivity, doTipo('state'), 'o estado');
+
+    // Versões antigas da atividade mandam o beacon ao descarregar o iframe.
+    await fetch(`http://127.0.0.1:${server.address().port}/api/rooms/leave`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: tokenDe(room.id, 'viewer', 'u1') }),
+    });
+    naActivity.close();
+    await fechou(naActivity);
+    const recriada = await conectar(tokenDe(room.id, 'viewer', 'u1'));
+    await ate(recriada, doTipo('state'), 'o estado da atividade recriada');
+
+    await new Promise((pronto) => setTimeout(pronto, GRACA_MS * 2));
+
+    expect(transmissor.recebidas.some(doTipo('stop-request'))).toBe(false);
+    expect(aba.recebidas.some(doTipo('close-request'))).toBe(false);
+    expect(room.broadcasters.size).toBe(1);
+  });
+});
+
+describe('diagnóstico do cliente', () => {
+  const msg = (event, dados) => ({ type: 'diagnostic', event, dados });
+  const contexto = { sala: 'sala-1', pessoa: 'abc12345' };
+
+  it('sanea os dados: chaves simples, valores primitivos e texto curto', () => {
+    const muitas = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`k${i}`, i]));
+    const limpo = sanearDadosCliente({
+      ok: 1,
+      'chave inválida': 1,
+      [`${'a'.repeat(25)}`]: 1,
+      nan: NaN,
+      infinito: Infinity,
+      sim: true,
+      texto: 'x'.repeat(100),
+      aninhado: { a: 1 },
+      lista: [1],
+      nulo: null,
+    });
+
+    expect(limpo).toEqual({ ok: 1, sim: true, texto: 'x'.repeat(60) });
+    expect(Object.keys(sanearDadosCliente(muitas))).toHaveLength(16);
+    expect(sanearDadosCliente('texto')).toEqual({});
+    expect(sanearDadosCliente([1, 2])).toEqual({});
+  });
+
+  it('grava eventos da allowlist com papel, sala e pessoa, e ignora o resto', () => {
+    const ws = { __papel: 'atividade' };
+    const log = vi.fn();
+
+    expect(
+      registrarDiagnosticoCliente(ws, msg('viewer-saude', { fps: 30 }), contexto, 0, log),
+    ).toBe(true);
+    expect(registrarDiagnosticoCliente(ws, msg('qualquer-coisa', { a: 1 }), contexto, 0, log)).toBe(
+      false,
+    );
+    expect(registrarDiagnosticoCliente(ws, msg('viewer-recovery'), contexto, 0, log)).toBe(false);
+
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledWith('cliente.viewer-saude', {
+      papel: 'atividade',
+      sala: 'sala-1',
+      pessoa: 'abc12345',
+      fps: 30,
+    });
+  });
+
+  it('limita 30 eventos por minuto por socket e avisa uma vez com o total descartado', () => {
+    vi.useFakeTimers();
+    try {
+      const ws = { __papel: 'transmissao' };
+      const log = vi.fn();
+      for (let i = 0; i < 35; i++) {
+        registrarDiagnosticoCliente(ws, msg('tx-saude', { i }), contexto, 1000, log);
+      }
+      expect(log).toHaveBeenCalledTimes(30);
+
+      vi.advanceTimersByTime(60_000);
+      expect(log).toHaveBeenCalledTimes(31);
+      expect(log).toHaveBeenLastCalledWith('cliente.limite', {
+        papel: 'transmissao',
+        sala: 'sala-1',
+        pessoa: 'abc12345',
+        descartados: 5,
+      });
+
+      // Passada a janela, volta a aceitar.
+      registrarDiagnosticoCliente(ws, msg('tx-saude'), contexto, 70_000, log);
+      expect(log).toHaveBeenCalledTimes(32);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('o servidor aceita o canal na atividade e no transmissor sem derrubar o socket', async () => {
+    const { transmissor, espectador } = await noAr();
+    transmissor.send(JSON.stringify(msg('tx-saude', { fps: 30 })));
+    espectador.send(JSON.stringify(msg('viewer-saude', { fps: 30 })));
+    espectador.send(JSON.stringify({ type: 'diagnostic', event: 'viewer-recovery' }));
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(transmissor.readyState).toBe(WebSocket.OPEN);
+    expect(espectador.readyState).toBe(WebSocket.OPEN);
   });
 });
