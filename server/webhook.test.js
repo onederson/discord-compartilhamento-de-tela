@@ -38,18 +38,40 @@ describe('montarMensagem', () => {
     const e = montarMensagem(bug, 'https://x.test/').embeds[0];
     expect(e.title).toBe('🐞 Problema relatado');
     expect(e.url).toBe('https://x.test/admin#relato-20261109-123045-abcd');
-    const texto = JSON.stringify(e.fields);
-    expect(texto).toContain('atividade · Discord · Discord/1.0 Chrome/148');
-    expect(texto).toContain('Sala (s1)');
-    expect(texto).toContain('Ana');
-    expect(texto).not.toContain('Quem transmitia');
+    // Contexto vai compacto no rodapé, não em campos.
+    expect(e.footer.text).toBe(
+      'Relatado por Ana · Sala (s1) · atividade · Discord · Discord/1.0 Chrome/148',
+    );
+    expect(JSON.stringify(e.fields)).not.toContain('Quem transmitia');
+  });
+
+  it('o texto do relato é o corpo, logo abaixo da barra de gravidade', () => {
+    const e = montarMensagem(bug, 'https://x.test').embeds[0];
+    expect(e.description).toBe('🟨⬜⬜ Problema\n\na tela trava');
+    expect(montarMensagem(denuncia, 'https://x.test').embeds[0].description).toMatch(
+      /^🟧🟧⬜ Denúncia\n/,
+    );
+  });
+
+  it('cada nível tem cor de borda própria', () => {
+    const cor = (r) => montarMensagem(r, 'https://x.test').embeds[0].color;
+    const cores = [cor(bug), cor(denuncia), cor({ ...denuncia, urgente: true })];
+    expect(new Set(cores).size).toBe(3);
+  });
+
+  it('o link que resolve fica no próprio aviso', () => {
+    const link = '(https://x.test/admin#relato-20261109-123045-abcd)';
+    for (const r of [bug, denuncia, { ...denuncia, categoria: 'menores', urgente: true }]) {
+      expect(JSON.stringify(montarMensagem(r, 'https://x.test').embeds[0].fields)).toContain(link);
+    }
   });
 
   it('denúncia: categoria legível, alvo com id e print anexado', () => {
-    const e = montarMensagem(denuncia, 'https://x.test').embeds[0];
+    const e = montarMensagem({ ...denuncia, prints: 2 }, 'https://x.test').embeds[0];
     expect(e.title).toBe('🚩 Denúncia: Golpe ou fraude');
     expect(JSON.stringify(e.fields)).toContain('Beto (999)');
     expect(e.image).toEqual({ url: 'attachment://print-1.jpg' });
+    expect(e.footer.text).toContain('📎 2 prints');
   });
 
   it('menores: urgente, sem imagem e com o lembrete', () => {
@@ -60,6 +82,8 @@ describe('montarMensagem', () => {
     const e = m.embeds[0];
     expect(e.title).toBe('🚨 URGENTE — risco a menores');
     expect(e.image).toBeUndefined();
+    expect(e.description).toMatch(/^🟥🟥🟥 Urgente\n/);
+    expect(e.footer.text).not.toContain('📎');
     expect(JSON.stringify(m)).toContain('Nenhuma imagem foi guardada');
     expect(JSON.stringify(m)).toContain('SaferNet');
   });

@@ -9,7 +9,8 @@ const PREFIXOS_WEBHOOK = [
 const TIMEOUT_MS = 10_000;
 
 const COR_BUG = 0xe2a13c;
-const COR_DENUNCIA = 0xe5484d;
+const COR_DENUNCIA = 0xf2762e;
+const COR_URGENTE = 0xe5484d;
 
 export const CATEGORIAS = {
   sexual: 'Conteúdo sexual',
@@ -69,16 +70,19 @@ export function montarMensagem(relato, publicOrigin) {
   // userAgent. Daí sai um rótulo curto para quem lê o aviso no canal.
   const plataforma = descreverPlataforma(relato.contexto);
 
-  const campos = [
-    campo(
-      'Origem',
-      [relato.origem, typeof plataforma === 'string' ? plataforma : null]
-        .filter(Boolean)
-        .join(' · '),
-    ),
-    campo('Sala', relato.sala?.nome ? `${relato.sala.nome} (${relato.sala.id})` : relato.sala?.id),
-    campo('Relatado por', relato.quem?.nome),
-  ];
+  const painel = `${String(publicOrigin).replace(/\/+$/, '')}/admin#relato-${relato.id}`;
+
+  // Prints nunca existem em denúncia de menores; a checagem aqui é a segunda
+  // trava, caso um relato mal formado chegue com contagem.
+  const prints = !urgente && relato.prints > 0 ? relato.prints : 0;
+
+  // Gravidade antes do texto: dá para saber o nível só pela barra e pela cor
+  // da borda; o rótulo ao lado confirma para quem não distingue as cores.
+  const nivel = urgente ? '🟥🟥🟥 Urgente' : denuncia ? '🟧🟧⬜ Denúncia' : '🟨⬜⬜ Problema';
+
+  // O que pede ação fica no corpo: quem agir (o alvo), o aviso e o link que
+  // resolve, juntos. Texto de usuário entra só na descrição e nos valores.
+  const campos = [];
   if (denuncia) {
     campos.push(
       campo('Quem transmitia', `${relato.alvo?.nome ?? '—'} (${relato.alvo?.uid ?? '—'})`),
@@ -88,30 +92,50 @@ export function montarMensagem(relato, publicOrigin) {
   if (urgente) {
     campos.push(
       campo(
-        'Atenção',
-        'Nenhuma imagem foi guardada. Encerre/bloqueie pelo painel e denuncie ao Discord e à SaferNet.',
+        '⚠️ Atenção',
+        `Nenhuma imagem foi guardada. [Encerre/bloqueie pelo painel](${painel}) e denuncie ao Discord e à SaferNet.`,
+        false,
+      ),
+    );
+  } else {
+    campos.push(
+      campo(
+        'Resolver',
+        denuncia
+          ? `[Encerrar, bloquear ou resolver no painel](${painel})`
+          : `[Abrir e resolver no painel](${painel})`,
         false,
       ),
     );
   }
 
+  // Quem relatou, onde e de qual plataforma são contexto, não o assunto: vão
+  // compactos no rodapé, que o Discord mostra menor e sem interpretar markdown.
+  const rodape = [
+    relato.quem?.nome ? `Relatado por ${relato.quem.nome}` : null,
+    relato.sala?.nome ? `${relato.sala.nome} (${relato.sala.id})` : relato.sala?.id,
+    relato.origem,
+    typeof plataforma === 'string' ? plataforma : null,
+    prints > 0 ? `📎 ${prints} ${prints === 1 ? 'print' : 'prints'}` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
   const embed = {
     title: titulo,
-    description: cortar(relato.texto || '(sem texto)', 1000),
-    color: urgente || denuncia ? COR_DENUNCIA : COR_BUG,
+    description: `${nivel}\n\n${cortar(relato.texto || '(sem texto)', 1000 - nivel.length - 2)}`,
+    color: urgente ? COR_URGENTE : denuncia ? COR_DENUNCIA : COR_BUG,
     fields: campos,
-    url: `${String(publicOrigin).replace(/\/+$/, '')}/admin#relato-${relato.id}`,
+    url: painel,
     timestamp: relato.criadoEm,
   };
-
-  // Prints nunca existem em denúncia de menores; a checagem aqui é a segunda
-  // trava, caso um relato mal formado chegue com contagem.
-  if (!urgente && relato.prints > 0) embed.image = { url: 'attachment://print-1.jpg' };
+  if (rodape) embed.footer = { text: cortar(rodape, 2000) };
+  if (prints > 0) embed.image = { url: 'attachment://print-1.jpg' };
 
   return {
-    content: urgente
-      ? '🚨 **URGENTE** — nenhuma imagem foi guardada. Encerre/bloqueie pelo painel e denuncie ao Discord e à SaferNet.'
-      : undefined,
+    // Curto: é o que aparece na notificação. O aviso completo está no embed,
+    // ao lado do link que resolve.
+    content: urgente ? '🚨 **URGENTE** — risco a menores' : undefined,
     embeds: [embed],
     // Vazio de propósito: o texto é de quem relatou, e sem isto um "@everyone"
     // escrito no relato acordaria o canal inteiro.
