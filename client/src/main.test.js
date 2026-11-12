@@ -226,10 +226,12 @@ describe('diagnóstico da sala', () => {
     expect(botao.dataset.state).toBe('connected');
     botao.click();
     expect(document.getElementById('panel').hidden).toBe(false);
+    expect(document.getElementById('panel').dataset.state).toBe('connected');
     expect(botao.getAttribute('aria-expanded')).toBe('true');
 
     socket.dispatch('close');
     expect(botao.dataset.state).toBe('reconnecting');
+    expect(document.getElementById('panel').dataset.state).toBe('reconnecting');
     expect(document.getElementById('connectionText').textContent).toBe('Reconectando');
   });
 
@@ -239,6 +241,7 @@ describe('diagnóstico da sala', () => {
     document.querySelector('.watch-prompt button').click();
     socket.message({ type: 'config', slot: 0, config });
     await vi.advanceTimersByTimeAsync(1000);
+    expect(document.getElementById('pLag').dataset.level).toBe('ok');
     const copiar = vi.fn().mockResolvedValue();
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText: copiar },
@@ -728,8 +731,10 @@ describe('reportar problema e denunciar', () => {
     expect(document.activeElement).toBe(document.getElementById('bugText'));
 
     digitar('bugText', 'curto');
+    expect(document.getElementById('bugCount').dataset.state).toBe('curto');
     expect(document.getElementById('bugSend').disabled).toBe(true);
     digitar('bugText', 'a imagem congelou ao trocar de tela');
+    expect(document.getElementById('bugCount').dataset.state).toBe('ok');
     expect(document.getElementById('bugSend').disabled).toBe(false);
 
     document.getElementById('bugSend').click();

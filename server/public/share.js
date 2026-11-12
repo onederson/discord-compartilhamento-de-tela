@@ -157,7 +157,7 @@ try {
       if (painel && !painel.ativo() && !painel.indisponivel()) {
         painel.verCamera?.();
         painel.setStatus(
-          'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+          'Clique no botão "Ligar a câmera" abaixo para transmitir a webcam.',
           'aviso',
         );
       }
@@ -421,7 +421,7 @@ function ligarControle() {
         const painel = paineis.camera;
         if (painel && !painel.ativo() && !painel.indisponivel()) {
           painel.setStatus(
-            'Clique no botão "Ligar a câmera" acima para transmitir a webcam.',
+            'Clique no botão "Ligar a câmera" abaixo para transmitir a webcam.',
             'aviso',
           );
         }
@@ -616,7 +616,7 @@ function criarPainel(fonte) {
       dispositivo = id ?? s.getVideoTracks()[0]?.getSettings().deviceId ?? null;
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia ativa — clique no botão "Ligar a câmera" acima para transmitir.');
+      setStatus('Prévia ativa — clique no botão "Ligar a câmera" abaixo para transmitir.');
       await listarCameras();
     } catch (err) {
       setStatus(
@@ -636,7 +636,7 @@ function criarPainel(fonte) {
       });
       pararPrevia();
       mostrarPrevia(s);
-      setStatus('Prévia ativa — clique no botão "Escolher janela ou tela" acima para transmitir.');
+      setStatus('Prévia ativa — clique no botão "Escolher janela ou tela" abaixo para transmitir.');
     } catch (err) {
       // Cancelar o seletor é escolha, não falha.
       if (err.name !== 'NotAllowedError') setStatus(err.message, 'error');
@@ -877,17 +877,20 @@ function criarPainel(fonte) {
       atualizarStatusGlobal();
     } catch (err) {
       broadcaster = null;
+      // Sem isto o selo do cabeçalho continua "Ao Vivo" depois de um seletor
+      // cancelado: ele foi calculado enquanto o broadcaster ainda existia.
+      atualizarStatusGlobal();
       el('start').disabled = false;
       // NotAllowedError quer dizer coisas diferentes nas duas fontes: na tela é
       // quase sempre cancelar o seletor; na câmera é a permissão negada.
       const negado = camera
         ? 'Acesso à câmera negado. Libere a permissão na barra de endereço e tente de novo.'
-        : 'Você cancelou a seleção de tela. Clique no botão acima para escolher novamente.';
+        : 'Você cancelou a seleção de tela. Clique no botão abaixo para escolher novamente.';
       const msg =
         err.name === 'NotAllowedError'
           ? negado
           : err.name === 'InvalidStateError'
-            ? 'O navegador exige um clique para abrir a tela. Clique no botão "Escolher janela ou tela" acima.'
+            ? 'O navegador exige um clique para abrir a tela. Clique no botão "Escolher janela ou tela" abaixo.'
             : err.message;
       setStatus(msg, err.name === 'NotAllowedError' ? 'aviso' : 'error');
     } finally {
@@ -1033,7 +1036,7 @@ if (!payload) {
       });
     }
     paineis.tela?.setStatus(
-      'A transmissão atual continua no ar. Clique no botão acima para selecionar a nova tela.',
+      'A transmissão atual continua no ar. Clique no botão abaixo para selecionar a nova tela.',
       'aviso',
     );
   }
@@ -1088,6 +1091,7 @@ function contextoDoRelato() {
 function atualizarBug() {
   const n = $('bug-text').value.length;
   $('bug-count').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bug-count').dataset.state = n < BUG_MIN ? 'curto' : 'ok';
   $('bug-send').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
 }
 

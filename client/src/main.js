@@ -298,6 +298,7 @@ function setConnectionState(state) {
     offline: 'Sem rede',
   }[state];
   $('connectionPill').dataset.state = state;
+  $('panel').dataset.state = state;
   $('connectionText').textContent = texto;
   $('pConnection').textContent = texto;
   $('recoverStreams').disabled = state !== 'connected' || watching.size === 0;
@@ -1346,6 +1347,7 @@ function endStream(slot) {
   if (streams.size === 0) {
     clearInterval(lagTimer);
     lagTimer = null;
+    delete $('pLag').dataset.level;
     for (const id of ['pLag', 'pFps', 'pRes']) $(id).textContent = '—';
   }
 
@@ -1425,16 +1427,27 @@ function ensureStatsTimer() {
 
     const s = streams.get(activeSlot) ?? streams.values().next().value;
     if (!s) return;
-    $('pLag').textContent = `${Math.max(0, s.player.getLag())} ms`;
+    const lag = Math.max(0, s.player.getLag());
+    $('pLag').dataset.level = lag < 400 ? 'ok' : lag < 1500 ? 'warn' : 'bad';
+    $('pLag').textContent = `${lag} ms`;
     $('pFps').textContent = `${s.fps} fps`;
     $('pRes').textContent = s.player.getSizes().video;
 
     // Quatro estados diferentes que, sem isto, parecem todos "sem som".
     const v = getVolume(s.userId);
-    if (!s.audio) $('pSom').textContent = 'a transmissão não tem áudio';
-    else if (!s.audio.temSom()) $('pSom').textContent = 'aguardando o áudio…';
-    else if (v === 0) $('pSom').textContent = 'silenciado aqui';
-    else $('pSom').textContent = `tocando · ${Math.round(v * 100)}%`;
+    if (!s.audio) {
+      $('pSom').dataset.state = 'sem';
+      $('pSom').textContent = 'a transmissão não tem áudio';
+    } else if (!s.audio.temSom()) {
+      $('pSom').dataset.state = 'aguardando';
+      $('pSom').textContent = 'aguardando o áudio…';
+    } else if (v === 0) {
+      $('pSom').dataset.state = 'mudo';
+      $('pSom').textContent = 'silenciado aqui';
+    } else {
+      $('pSom').dataset.state = 'tocando';
+      $('pSom').textContent = `tocando · ${Math.round(v * 100)}%`;
+    }
   }, 1000);
 }
 
@@ -3100,6 +3113,7 @@ let bugEnviado = false;
 function atualizarBug() {
   const n = $('bugText').value.length;
   $('bugCount').textContent = `${n} / 2000 · mínimo de ${BUG_MIN} caracteres`;
+  $('bugCount').dataset.state = n < BUG_MIN ? 'curto' : 'ok';
   $('bugSend').disabled = bugEnviando || bugEnviado || n < BUG_MIN;
 }
 

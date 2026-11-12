@@ -17,7 +17,7 @@
         }
       })();
     </script>
-    <link rel="stylesheet" href="/share.css?v=55" />
+    <link rel="stylesheet" href="/share.css?v=56" />
   </head>
   <body>
     <div class="apple-shell">
@@ -97,48 +97,22 @@
       <!-- Erro global / status da página -->
       <p id="pageStatus" class="status" role="status"></p>
 
-      <!-- Painel Bento: Visão Geral da Transmissão -->
+      <!-- Visão Geral da Transmissão (Linha compacta de metadados) -->
       <dl id="sessionOverview" class="session-overview" aria-label="Informações da transmissão">
-        <div class="overview-card">
-          <div class="overview-icon quality-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-              <line x1="8" y1="21" x2="16" y2="21"></line>
-              <line x1="12" y1="17" x2="12" y2="21"></line>
-            </svg>
-          </div>
-          <div class="overview-text">
-            <dt>Qualidade escolhida</dt>
-            <dd id="quality-summary">—</dd>
-          </div>
+        <div class="overview-item">
+          <dt>Qualidade</dt>
+          <dd id="quality-summary">—</dd>
+          <dd class="overview-hint">definida na Activity</dd>
         </div>
 
-        <div class="overview-card">
-          <div class="overview-icon control-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
-              <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
-              <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
-              <line x1="12" y1="20" x2="12.01" y2="20"></line>
-            </svg>
-          </div>
-          <div class="overview-text">
-            <dt>Controle da Activity</dt>
-            <dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd>
-          </div>
+        <div class="overview-item">
+          <dt>Controle da Activity</dt>
+          <dd id="control-status" data-state="connecting" aria-live="polite">Conectando à sala</dd>
         </div>
 
-        <div class="overview-card">
-          <div class="overview-icon privacy-icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-              <polyline points="9 12 11 14 15 10"></polyline>
-            </svg>
-          </div>
-          <div class="overview-text">
-            <dt>Privacidade</dt>
-            <dd>Sem gravação pelo servidor</dd>
-          </div>
+        <div class="overview-item">
+          <dt>Privacidade</dt>
+          <dd>Sem gravação pelo servidor</dd>
         </div>
       </dl>
 
@@ -155,7 +129,13 @@
               </svg>
               <h2>Tela</h2>
             </div>
+            <span class="tile-state" aria-hidden="true">
+              <span class="tile-state-off">Parada</span>
+              <span class="tile-state-on">No ar</span>
+            </span>
           </div>
+
+          <p id="tela-status" class="status" role="status"></p>
 
           <!-- Estado de Configuração (Setup) -->
           <div id="tela-setup" class="setup-container">
@@ -313,8 +293,6 @@
             </p>
             <button id="tela-recover-btn" class="primary pill-button">Selecionar tela novamente</button>
           </div>
-
-          <p id="tela-status" class="status" role="status"></p>
         </section>
 
         <!-- D. Card Lateral (Módulo de Câmera) -->
@@ -327,7 +305,13 @@
               </svg>
               <h2>Câmera</h2>
             </div>
+            <span class="tile-state" aria-hidden="true">
+              <span class="tile-state-off">Desligada</span>
+              <span class="tile-state-on">No ar</span>
+            </span>
           </div>
+
+          <p id="camera-status" class="status" role="status"></p>
 
           <!-- Estado de Configuração da Câmera -->
           <div id="camera-setup" class="setup-container">
@@ -337,14 +321,14 @@
                   <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
                   <circle cx="12" cy="13" r="4"></circle>
                 </svg>
-                <span class="empty-title">Câmera Desativada</span>
+                <span class="empty-title">Câmera desligada</span>
                 <span class="empty-subtitle">Transmita sua webcam junto com a tela</span>
               </div>
             </div>
             <video id="camera-previa" muted playsinline hidden></video>
 
             <div class="acao">
-              <button id="camera-start" class="primary pill-button">
+              <button id="camera-start" class="secondary pill-button">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M23 7l-7 5 7 5V7z"></path>
                   <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
@@ -353,7 +337,7 @@
               </button>
               <button
                 id="camera-escolher"
-                class="primary seta pill-icon-btn"
+                class="secondary seta pill-icon-btn"
                 title="Escolher a câmera"
                 aria-label="Escolher a câmera"
                 aria-haspopup="menu"
@@ -394,8 +378,6 @@
               <div id="camera-watchers-list" class="watchers-list"></div>
             </div>
           </div>
-
-          <p id="camera-status" class="status" role="status"></p>
         </section>
       </main>
 
@@ -471,6 +453,6 @@
       })();
     </script>
 
-    <script type="module" src="/share.js?v=57"></script>
+    <script type="module" src="/share.js?v=58"></script>
   </body>
 </html>
